@@ -1,0 +1,16 @@
+{
+    "autoload": {
+        "psr-4": {
+            "bronsted\\":"src"
+        }
+    },
+    "require": {
+        "php": "~8.0",
+        "revolt/event-loop": "^0.2.0",
+        "nyholm/psr7": "^1.5",
+        "kekos/multipart-form-data-parser": "dev-master"
+    },
+    "repositories": [
+        {"type": "vcs","url": "https://github.com/sorenbronsted/multipart-form-data-parser.git"}
+    ]
+}

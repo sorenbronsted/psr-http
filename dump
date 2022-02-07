@@ -1,0 +1,19 @@
+tring(186) "POST / HTTP/1.1
+Host: localhost:8080
+User-Agent: curl/7.74.0
+Accept: */*
+Content-Length: 327
+Content-Type: multipart/form-data; boundary=------------------------71d1974b35163b33
+
+"
+string(327) "--------------------------71d1974b35163b33
+Content-Disposition: form-data; name="user"
+
+foo
+--------------------------71d1974b35163b33
+Content-Disposition: form-data; name="data"; filename="seige.txt"
+Content-Type: text/plain
+
+siege -b -c 100 -t 10S http://localhost:8080
+--------------------------71d1974b35163b33--
+"

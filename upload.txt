@@ -1,0 +1,1 @@
+curl -F ‘data=@path/to/local/file’ UPLOAD_ADDRESS
