@@ -1,0 +1,16 @@
+version: '3.3'
+services:
+    httpserver:
+        build: .
+        container_name: httpserver
+        restart: "no"
+        ports:
+            - 8000:80
+        volumes:
+            - ..:/var/www/html
+#        env_file:
+#            - ../../../env/sobr.env
+networks:
+  default:
+    external:
+      name: dev-net
