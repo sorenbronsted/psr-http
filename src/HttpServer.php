@@ -16,6 +16,8 @@ use Psr\Http\Message\StreamInterface;
 use Revolt\EventLoop;
 use Revolt\EventLoop\Suspension;
 use SplTempFileObject;
+use function ftruncate;
+use function fwrite;
 
 class HttpServer
 {
@@ -26,7 +28,6 @@ class HttpServer
     private UploadedFileFactoryInterface $uploadFactory;
     private UriFactoryInterface $uriFactory;
     private StreamFactoryInterface $streamFactory;
-//    private Suspension $suspension;
 
     public function __construct(
         string $interface,
@@ -54,7 +55,7 @@ class HttpServer
         }
         stream_set_blocking($server, false);
 
-        EventLoop::onReadable($server, function () use ($server, $callback) {
+        EventLoop::onReadable($server, function (string $id, $server) use ($callback) {
            
             $stream = stream_socket_accept($server, 5);
             if (!$stream || !is_resource($stream)) {
@@ -63,9 +64,12 @@ class HttpServer
             stream_set_blocking($stream, false);
 
             // Read headers from stream
-            $buffer = $this->readHeaders($stream);
+            $buffer = $this->streamFactory->createStream();
+            $this->readHeaders($stream, $buffer);
+            $buffer->close();
+            $buffer->detach();
 
-            // Parse the headers
+            /* Parse the headers
             $response = null;
             try {
                 $request = $this->createRequest($buffer);
@@ -89,23 +93,22 @@ class HttpServer
 
             // write buffer to client
             $this->writeStream($stream, $buffer);
+            */
             fclose($stream);
         });
 
         EventLoop::run();
     }
 
-    private function readHeaders($stream): SplTempFileObject
+    private function readHeaders($stream, StreamInterface $buffer)
     {
-        $buffer = new SplTempFileObject();
         $stop = false;
         while(!$stop) {
             $line = $this->readLine($stream);
             // end-of-headers is one line with \r\n
             $stop = (strlen($line) == 2 && $line[0] == "\r" && $line[1] == "\n");
-            $buffer->fwrite($line);
+            $buffer->write($line);
         }
-        return $buffer;
     }
 
     private function readLine($stream): string

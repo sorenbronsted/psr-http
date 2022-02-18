@@ -9,13 +9,11 @@ use Revolt\EventLoop;
 $factory = new Psr17Factory();
 $server = new HttpServer('0.0.0.0', 8000, $factory, $factory, $factory, $factory, $factory);
 
-// EventLoop::repeat(5, function () {
-//     $memory = memory_get_usage() / 1024;
-//     $formatted = number_format($memory).' KiB';
-//     echo "Current memory usage: {$formatted}\n";
-
-//    // var_dump(EventLoop::getInfo());
-// });
+EventLoop::repeat(2, function () {
+     $memory = memory_get_usage() / 1024;
+     $formatted = number_format($memory).' KiB';
+     echo "Current memory usage: {$formatted}\n";
+});
 
 // EventLoop::onSignal(15, function() {
 //     memprof_dump_callgrind(fopen("callgrind", "w"));
@@ -23,6 +21,8 @@ $server = new HttpServer('0.0.0.0', 8000, $factory, $factory, $factory, $factory
 // });
 
 $server->run(function (ServerRequestInterface $request) use($factory) {
+    return;
+    /*
     $response = $factory->createResponse();
     $path = $request->getUri()->getPath();
     if ($path == '/') {
@@ -33,6 +33,7 @@ $server->run(function (ServerRequestInterface $request) use($factory) {
     }
     //memprof_dump_pprof(fopen("profile.heap", "w"));
     return $response;
+    */
 });
 
 
