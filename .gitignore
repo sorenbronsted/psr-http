@@ -1,4 +1,5 @@
 .vscode
 .idea
+.vagrant
+.phpunit.result.cache
 vendor
-/.phpunit.result.cache

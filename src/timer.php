@@ -38,11 +38,13 @@ function repeat(float $seconds, Closure $closure)
             Fiber::suspend();
         }
         else {
-            $seconds = $closure($seconds);
-            if ($seconds) {
-                $deadline = microtime(true) + $seconds;
+            $change = $closure($seconds);
+            if ($change !== null) {
+                $seconds = $change;
             }
-            $done = ($deadline > microtime(true));
+            $now = microtime(true);
+            $deadline = $now + $seconds;
+            $done = ($deadline <= $now);
         }
     }
 }

@@ -3,21 +3,20 @@
 namespace bronsted;
 
 use Exception;
+use Fiber;
 use Psr\Http\Message\MessageInterface;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseFactoryInterface;
 use Psr\Http\Message\ResponseInterface;
+use Psr\Http\Message\StreamFactoryInterface;
+use Psr\Http\Message\StreamInterface;
 use Psr\Http\Message\UriInterface;
-use Revolt\EventLoop;
-use Revolt\EventLoop\Suspension;
 use SplTempFileObject;
-
-require __DIR__ . '/../vendor/autoload.php';
+use function fclose;
 
 class HttpClient
 {
     private ResponseFactoryInterface $responseFactory;
-//    private Suspension $suspension;
 
     public function __construct(ResponseFactoryInterface $responseFactory)
     {
@@ -28,19 +27,12 @@ class HttpClient
     {
         $stream = $this->connect($request->getUri());
 
-        // write request to buffer
         $request = $request->withHeader('Connection', 'close');
-        $buffer = $this->writeRequest($request);
+        $this->writeRequest(new StreamWriter($stream), $request);
 
-        // write buffe async to remote
-        $this->writeStream($buffer, $stream);
-
-        // read response to buffer
-        $buffer = $this->readStream($stream);
+        $response = $this->readReponse(new StreamReader($stream));
         fclose($stream);
-
-        // parse the buffer
-        return $this->readReponse($buffer);
+        return $response;
     }
 
     private function connect(UriInterface $uri)
@@ -73,7 +65,7 @@ class HttpClient
             $errno,
             $errstr,
             PHP_INT_MAX, // not used because this a non blocking stream
-            STREAM_CLIENT_CONNECT | STREAM_CLIENT_ASYNC_CONNECT, 
+            STREAM_CLIENT_CONNECT | STREAM_CLIENT_ASYNC_CONNECT,
             $context
         );
         if (!$connection) {
@@ -83,40 +75,8 @@ class HttpClient
         return $connection;
     }
 
-    private function writeStream(SplTempFileObject $buffer, $stream)
+    private function writeRequest(StreamWriter $writer, RequestInterface $request)
     {
-        // write async to stream
-        $suspension = EventLoop::getSuspension();
-        $watcher = EventLoop::onWritable($stream, fn () => $suspension->resume());
-        $length = $buffer->ftell();
-        $buffer->rewind();
-        $pos = 0;
-        do {
-            $suspension->suspend();
-            $buffer->fseek($pos);
-            $written = fwrite($stream, $buffer->fread($length - $pos));
-            $pos += $written;
-        } while ($pos < $length);
-        EventLoop::cancel($watcher);
-    }
-
-    private function readStream($stream): SplTempFileObject
-    {
-        $buffer = new SplTempFileObject();
-        $suspension = EventLoop::getSuspension();
-        $watcher = EventLoop::onReadable($stream, fn () => $suspension->resume());
-        while(is_resource($stream) && !feof($stream)) {
-            $suspension->suspend();
-            $buffer->fwrite(fread($stream, 64 * 1024));
-        }
-        EventLoop::cancel($watcher);
-        return $buffer;
-    }
-
-    private function writeRequest(RequestInterface $request): SplTempFileObject
-    {
-        $buffer = new SplTempFileObject();
-
         $crlf = "\r\n";
         $uri = $request->getUri();
 
@@ -133,37 +93,28 @@ class HttpClient
                 $request->getProtocolVersion()
             ) . $crlf;
 
-        $buffer->fwrite($startLine, strlen($startLine));
+        $writer->write($startLine);
 
         $request = $request->withHeader('Host', $uri->getHost());
         foreach ($request->getHeaders() as $name => $values) {
             $line = $name . ': ' . implode(", ", $values) . $crlf;
-            $buffer->fwrite($line, strlen($line));
+            $writer->write($line);
         }
-        $buffer->fwrite($crlf, strlen($crlf));
-
-        $body = $request->getBody();
-        if ($body->getSize() > 0) {
-            $body->rewind();
-            $buffer->fwrite($body()->getContents(), $body()->getSize());
-        }
-        return $buffer;
+        $writer->write($crlf);
+        $writer->copyFrom($request->getBody());
     }
 
-    private function readReponse(SplTempFileObject $buffer): ResponseInterface
+    private function readReponse(StreamReader $reader): ResponseInterface
     {
-        $bufferSize = $buffer->ftell();
-        $buffer->rewind();
         $response = $this->responseFactory->createResponse();
-        $response = $this->addResponseStartLine($buffer, $response);
-        $response = $this->addHeaders($buffer, $response);
-        $response = $this->addBody($buffer, $bufferSize, $response);
-        return $response;
+        $response = $this->addResponseStartLine($reader, $response);
+        $response = $this->addHeaders($reader, $response);
+        return $this->addBody($reader, $response);
     }
 
-    private function addResponseStartLine(SplTempFileObject $buffer, $response): ResponseInterface
+    private function addResponseStartLine(StreamReader $reader, $response): ResponseInterface
     {
-        $line = $buffer->fgets();
+        $line = $reader->readLine();
         if (empty($line)) {
             throw new Exception('Empty start line', 400);
         }
@@ -186,39 +137,33 @@ class HttpClient
         return $response->withProtocolVersion($parts[1])->withStatus($statusCode);
     }
 
-    private function addHeaders(SplTempFileObject $buffer, MessageInterface $message): MessageInterface
+    private function addHeaders(StreamReader $reader, ResponseInterface $message): ResponseInterface
     {
-        $line = trim($buffer->fgets());
+        $line = trim($reader->readLine());
         while ($line) {
             $parts = explode(':', $line, 2);
             $name = trim($parts[0]);
             $value = trim($parts[1]);
             $message = $message->withAddedHeader($name, $value);
-            $line = trim($buffer->fgets());
+            $line = trim($reader->readLine());
         }
         return $message;
     }
 
-    private function addBody(SplTempFileObject $buffer, int $bufferSize, MessageInterface $message): MessageInterface
+    private function addBody(StreamReader $reader, ResponseInterface $message): ResponseInterface
     {
-        // Try to figure out the length og the body
+        $body = $message->getBody();
         $length = $message->getHeader('content-length');
         if (empty($length)) {
-            // No length from header, so we look at the buffer
-            $length = $buffer->eof() ? 0 : $bufferSize - $buffer->ftell();
+            $reader->copyAllTo($body);
         }
         else {
-            // Header is always an array
             $length = $length[0];
+            if ($length <= 0) {
+                return $message;
+            }
+            $reader->copyTo($body, $length);
         }
-
-        // no length => no body
-        if ($length <= 0) {
-            return $message;
-        }
-
-        $body = $message->getBody();
-        $body->write(trim($buffer->fread($length)));
         $body->rewind();
         return $message;
     }

@@ -15,6 +15,7 @@ $server->run(function (ServerRequestInterface $request) use($factory, $client) {
     $path = $request->getUri()->getPath();
     if ($path == '/') {
         $request = $factory->createRequest('GET', 'http://localhost:8000/hello?name=Kurt');
+        //$request = $factory->createRequest('GET', 'http://bronsted.dk');
         return $client->fetch($request);
     } else if ($path == '/hello') {
         $response = $factory->createResponse();

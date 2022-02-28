@@ -1,34 +1,38 @@
 <?php
 
-function readStream(mixed $resource, Closure $closure)
+function readStream(mixed $stream, Closure $closure)
 {
-    $done = false;
-    while(!$done) {
+    while(true) {
         Fiber::suspend();
-        $read = [$resource];
+        $done = !is_resource($stream) || feof($stream);
+        if ($done) {
+            return;
+        }
+        $read = [$stream];
         $write = null;
         $expect = null;
         $n = stream_select($read, $write, $expect, 0, 0);
         if ($n > 0) {
-            $closure($resource);
+            $closure($stream);
         }
-        $done = feof($resource) || !is_resource($resource);
     }
 }
 
-function writeStream(mixed $resource, Closure $closure)
+function writeStream(mixed $stream, Closure $closure)
 {
-    $done = false;
-    while(!$done) {
+    while(true) {
         Fiber::suspend();
+        $done = !is_resource($stream) || feof($stream);
+        if ($done) {
+            return;
+        }
         $read = null;
-        $write = [$resource];
+        $write = [$stream];
         $expect = null;
         $n = stream_select($read, $write, $expect, 0, 0);
         if ($n > 0) {
-            $closure($resource);
+            $closure($stream);
         }
-        $done = feof($resource) || !is_resource($resource);
     }
 }
 

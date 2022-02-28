@@ -4,6 +4,7 @@ namespace bronsted;
 
 use Closure;
 use Exception;
+use Fiber;
 use Psr\Http\Message\ResponseFactoryInterface;
 use Psr\Http\Message\ServerRequestFactoryInterface;
 use Psr\Http\Message\ServerRequestInterface;
@@ -13,11 +14,12 @@ use Kekos\MultipartFormDataParser\Parser;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\StreamFactoryInterface;
 use Psr\Http\Message\StreamInterface;
-use Revolt\EventLoop;
-use Revolt\EventLoop\Suspension;
 use SplTempFileObject;
-use function ftruncate;
+use function fclose;
+use function feof;
+use function fread;
 use function fwrite;
+use function strlen;
 
 class HttpServer
 {
@@ -28,16 +30,18 @@ class HttpServer
     private UploadedFileFactoryInterface $uploadFactory;
     private UriFactoryInterface $uriFactory;
     private StreamFactoryInterface $streamFactory;
+    private Scheduler $scheduler;
 
     public function __construct(
-        string $interface,
-        int $port,
+        string                        $interface,
+        int                           $port,
         ServerRequestFactoryInterface $requestFactory,
-        ResponseFactoryInterface $responseFactory,
-        UploadedFileFactoryInterface $uploadFactory,
-        UriFactoryInterface $uriFactory,
-        StreamFactoryInterface $streamFactory
-    ) {
+        ResponseFactoryInterface      $responseFactory,
+        UploadedFileFactoryInterface  $uploadFactory,
+        UriFactoryInterface           $uriFactory,
+        StreamFactoryInterface        $streamFactory
+    )
+    {
         $this->interface = $interface;
         $this->port = $port;
         $this->requestFactory = $requestFactory;
@@ -45,6 +49,7 @@ class HttpServer
         $this->uploadFactory = $uploadFactory;
         $this->uriFactory = $uriFactory;
         $this->streamFactory = $streamFactory;
+        $this->scheduler = Scheduler::instance();
     }
 
     public function run(Closure $callback)
@@ -55,115 +60,51 @@ class HttpServer
         }
         stream_set_blocking($server, false);
 
-        EventLoop::onReadable($server, function (string $id, $server) use ($callback) {
-           
+        $this->scheduler->onReadable($server, function ($server) use ($callback) {
             $stream = stream_socket_accept($server, 5);
             if (!$stream || !is_resource($stream)) {
                 return;
             }
             stream_set_blocking($stream, false);
 
-            // Read headers from stream
-            $buffer = $this->streamFactory->createStream();
-            $this->readHeaders($stream, $buffer);
-            $buffer->close();
-            $buffer->detach();
-
-            /* Parse the headers
-            $response = null;
-            try {
-                $request = $this->createRequest($buffer);
-                $request = $this->addHeaders($buffer, $request);
-                $request = $this->addBody($stream, $request);
-            } catch (Exception $e) {
-                $code = $e->getCode();
-                if ($code < 400 || $code > 499) {
-                    $code = 400;
-                }
-                $response = $this->responseFactory->createResponse($code);
-            }
-
-            // call callback if we don't have a response allready
-            if (empty($response)) {
-                $response = $callback->call($this, $request);
-            }
-
-            // response to buffer
-            $buffer = $this->writeReponse($response);
-
-            // write buffer to client
-            $this->writeStream($stream, $buffer);
-            */
-            fclose($stream);
+            $this->scheduler->defer(function() use($stream, $callback) {
+                $this->work($stream, $callback);
+            });
         });
 
-        EventLoop::run();
+        $this->scheduler->run();
     }
 
-    private function readHeaders($stream, StreamInterface $buffer)
+    private function work(mixed $stream, Closure $callback)
     {
-        $stop = false;
-        while(!$stop) {
-            $line = $this->readLine($stream);
-            // end-of-headers is one line with \r\n
-            $stop = (strlen($line) == 2 && $line[0] == "\r" && $line[1] == "\n");
-            $buffer->write($line);
-        }
-    }
-
-    private function readLine($stream): string
-    {
-        $stop = false;
-        $chars = '';
-        $suspension = EventLoop::getSuspension();
-        $watcher = EventLoop::onReadable($stream, fn () => $suspension->resume());
-        while(!feof($stream) && !$stop) {
-            $byte = null;
-            do {
-                $byte = fread($stream, 1);
-                $chars .= $byte;
-            } while($byte && $byte != "\n");
-            $stop = (strlen($chars) > 1 && $chars[-1] == "\n");
-            if (!$stop) {
-                $suspension->suspend();
+        $request = $response = null;
+        try {
+            // Read headers from stream
+            $reader = new StreamReader($stream);
+            $request = $this->createRequest($reader);
+            $request = $this->addHeaders($reader, $request);
+            $request = $this->addBody($reader, $request);
+        } catch (Exception $e) {
+            $code = $e->getCode();
+            if ($code < 400 || $code > 499) {
+                $code = 400;
             }
+            $response = $this->responseFactory->createResponse($code);
         }
-        EventLoop::cancel($watcher);
-        return $chars;
+
+        // call callback if we don't have a response already
+        if (empty($response)) {
+            $response = $callback->call($this, $request);
+        }
+
+        // response to buffer
+        $writer = new StreamWriter($stream);
+        $this->writeResponse($writer, $response);
+        $writer->close();
     }
 
-    private function copyToStream($stream, $length, StreamInterface $destination)
+    private function writeResponse(StreamWriter $writer, ResponseInterface $response)
     {
-        $pos = 0;
-        $suspension = EventLoop::getSuspension();
-        $watcher = EventLoop::onReadable($stream, fn () => $suspension->resume());
-        while(!feof($stream) && $pos < $length) {
-            $suspension->suspend();
-            $destination->write(fread($stream, $length - $pos));
-            $pos = $destination->tell();
-        }
-        EventLoop::cancel($watcher);
-    }
-    
-    private function writeStream($stream, SplTempFileObject $buffer)
-    {
-        $suspension = EventLoop::getSuspension();
-        $watcher = EventLoop::onWritable($stream, fn () => $suspension->resume());
-        $length = $buffer->ftell();
-        $buffer->rewind();
-        $pos = 0;
-        do {
-            $suspension->suspend();
-            $buffer->fseek($pos);
-            $written = fwrite($stream, $buffer->fread($length - $pos));
-            $pos += $written;
-        } while ($pos < $length);
-        EventLoop::cancel($watcher);
-    }
-
-    private function writeReponse(ResponseInterface $response): SplTempFileObject
-    {
-        $buffer = new SplTempFileObject();
         $crlf = "\r\n";
 
         $contentLength = $response->getBody()->getSize();
@@ -179,26 +120,24 @@ class HttpServer
             $response->getStatusCode(),
             $response->getReasonPhrase()
         );
-        $buffer->fwrite($line . $crlf);
+        $writer->write($line . $crlf);
 
         foreach ($response->getHeaders() as $name => $value) {
             $line = sprintf('%s: %s', $name, implode(';', $value));
-            $buffer->fwrite($line . $crlf);
+            $writer->write($line . $crlf);
         }
-        $buffer->fwrite($crlf);
+        $writer->write($crlf);
 
         if ($contentLength > 0) {
             $body = $response->getBody();
             $body->rewind();
-            $buffer->fwrite($body->read($contentLength), $contentLength);
+            $writer->copyFrom($body);
         }
-        return $buffer;
     }
 
-    private function createRequest(SplTempFileObject $buffer): ServerRequestInterface
+    private function createRequest(StreamReader $reader): ServerRequestInterface
     {
-        $buffer->rewind();
-        $line = $buffer->fgets();
+        $line = $reader->readLine();
         if (!$line) {
             throw new Exception('No start line', 400);
         }
@@ -235,9 +174,9 @@ class HttpServer
         return $this->requestFactory->createServerRequest($method, $uri)->withQueryParams($query);
     }
 
-    private function addHeaders(SplTempFileObject $buffer, ServerRequestInterface $request): ServerRequestInterface
+    private function addHeaders(StreamReader $reader, ServerRequestInterface $request): ServerRequestInterface
     {
-        $line = trim($buffer->fgets());
+        $line = trim($reader->readLine());
         $cookies = [];
         while ($line) {
             $parts = explode(':', $line, 2);
@@ -252,12 +191,12 @@ class HttpServer
             } else {
                 $request = $request->withAddedHeader($name, $value);
             }
-            $line = trim($buffer->fgets());
+            $line = trim($reader->readLine());
         }
         return $request->withCookieParams($cookies);
     }
 
-    private function addBody($connection, ServerRequestInterface $request): ServerRequestInterface
+    private function addBody(StreamReader $reader, ServerRequestInterface $request): ServerRequestInterface
     {
         $length = $request->getHeader('content-length');
         $type = $request->getHeader('content-type');
@@ -266,7 +205,7 @@ class HttpServer
         }
         $length = $length[0];
         $body = $request->getBody();
-        $this->copyToStream($connection, $length, $body);
+        $reader->copyTo($body, $length);
         $body->rewind();
 
         $type = $type[0];
