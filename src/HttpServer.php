@@ -4,7 +4,6 @@ namespace bronsted;
 
 use Closure;
 use Exception;
-use Fiber;
 use Psr\Http\Message\ResponseFactoryInterface;
 use Psr\Http\Message\ServerRequestFactoryInterface;
 use Psr\Http\Message\ServerRequestInterface;
@@ -13,12 +12,6 @@ use Psr\Http\Message\UriFactoryInterface;
 use Kekos\MultipartFormDataParser\Parser;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\StreamFactoryInterface;
-use Psr\Http\Message\StreamInterface;
-use SplTempFileObject;
-use function fclose;
-use function feof;
-use function fread;
-use function fwrite;
 use function strlen;
 
 class HttpServer
@@ -66,6 +59,7 @@ class HttpServer
                 return;
             }
             stream_set_blocking($stream, false);
+            $stream = new Stream($stream);
 
             $this->scheduler->defer(function() use($stream, $callback) {
                 $this->work($stream, $callback);
@@ -75,15 +69,14 @@ class HttpServer
         $this->scheduler->run();
     }
 
-    private function work(mixed $stream, Closure $callback)
+    private function work(Stream $stream, Closure $callback)
     {
         $request = $response = null;
         try {
             // Read headers from stream
-            $reader = new StreamReader($stream);
-            $request = $this->createRequest($reader);
-            $request = $this->addHeaders($reader, $request);
-            $request = $this->addBody($reader, $request);
+            $request = $this->createRequest($stream);
+            $request = $this->addHeaders($stream, $request);
+            $request = $this->addBody($stream, $request);
         } catch (Exception $e) {
             $code = $e->getCode();
             if ($code < 400 || $code > 499) {
@@ -98,12 +91,11 @@ class HttpServer
         }
 
         // response to buffer
-        $writer = new StreamWriter($stream);
-        $this->writeResponse($writer, $response);
-        $writer->close();
+        $this->writeResponse($stream, $response);
+        $stream->close();
     }
 
-    private function writeResponse(StreamWriter $writer, ResponseInterface $response)
+    private function writeResponse(Stream $writer, ResponseInterface $response)
     {
         $crlf = "\r\n";
 
@@ -135,7 +127,7 @@ class HttpServer
         }
     }
 
-    private function createRequest(StreamReader $reader): ServerRequestInterface
+    private function createRequest(Stream $reader): ServerRequestInterface
     {
         $line = $reader->readLine();
         if (!$line) {
@@ -174,7 +166,7 @@ class HttpServer
         return $this->requestFactory->createServerRequest($method, $uri)->withQueryParams($query);
     }
 
-    private function addHeaders(StreamReader $reader, ServerRequestInterface $request): ServerRequestInterface
+    private function addHeaders(Stream $reader, ServerRequestInterface $request): ServerRequestInterface
     {
         $line = trim($reader->readLine());
         $cookies = [];
@@ -196,7 +188,7 @@ class HttpServer
         return $request->withCookieParams($cookies);
     }
 
-    private function addBody(StreamReader $reader, ServerRequestInterface $request): ServerRequestInterface
+    private function addBody(Stream $reader, ServerRequestInterface $request): ServerRequestInterface
     {
         $length = $request->getHeader('content-length');
         $type = $request->getHeader('content-type');
@@ -210,7 +202,7 @@ class HttpServer
 
         $type = $type[0];
         if (strpos($type, 'form-data') > 0) {
-            $parser = new Parser((string)$request->getBody(), $type, $this->uploadFactory, $this->streamFactory);
+            $parser = new Parser($request->getBody()->getContents(), $type, $this->uploadFactory, $this->streamFactory);
             $request = $parser->decorateRequest($request);
         } else if (strpos($type, 'json') > 0) {
             $data = json_decode($body->read($length));

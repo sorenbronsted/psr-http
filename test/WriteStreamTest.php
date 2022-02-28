@@ -13,7 +13,7 @@ class WriteStreamTest extends TestCase
         $resource = fopen('/tmp/sletmig', 'w+');
         stream_set_blocking($resource, false);
         $scheduler->onWriteable($resource, function($stream) use (&$called) {
-            $writer = new StreamWriter($stream);
+            $writer = new Stream($stream);
             $called += 1;
             if ($called > 1) {
                 $writer->close();

@@ -3,16 +3,11 @@
 namespace bronsted;
 
 use Exception;
-use Fiber;
-use Psr\Http\Message\MessageInterface;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseFactoryInterface;
 use Psr\Http\Message\ResponseInterface;
-use Psr\Http\Message\StreamFactoryInterface;
-use Psr\Http\Message\StreamInterface;
 use Psr\Http\Message\UriInterface;
-use SplTempFileObject;
-use function fclose;
+use function strpos;
 
 class HttpClient
 {
@@ -25,13 +20,13 @@ class HttpClient
 
     function fetch(RequestInterface $request): ResponseInterface
     {
-        $stream = $this->connect($request->getUri());
+        $stream = new Stream($this->connect($request->getUri()));
 
         $request = $request->withHeader('Connection', 'close');
-        $this->writeRequest(new StreamWriter($stream), $request);
+        $this->writeRequest($stream, $request);
 
-        $response = $this->readReponse(new StreamReader($stream));
-        fclose($stream);
+        $response = $this->readReponse($stream);
+        $stream->close();
         return $response;
     }
 
@@ -75,7 +70,7 @@ class HttpClient
         return $connection;
     }
 
-    private function writeRequest(StreamWriter $writer, RequestInterface $request)
+    private function writeRequest(Stream $writer, RequestInterface $request)
     {
         $crlf = "\r\n";
         $uri = $request->getUri();
@@ -104,7 +99,7 @@ class HttpClient
         $writer->copyFrom($request->getBody());
     }
 
-    private function readReponse(StreamReader $reader): ResponseInterface
+    private function readReponse(Stream $reader): ResponseInterface
     {
         $response = $this->responseFactory->createResponse();
         $response = $this->addResponseStartLine($reader, $response);
@@ -112,7 +107,7 @@ class HttpClient
         return $this->addBody($reader, $response);
     }
 
-    private function addResponseStartLine(StreamReader $reader, $response): ResponseInterface
+    private function addResponseStartLine(Stream $reader, $response): ResponseInterface
     {
         $line = $reader->readLine();
         if (empty($line)) {
@@ -137,7 +132,7 @@ class HttpClient
         return $response->withProtocolVersion($parts[1])->withStatus($statusCode);
     }
 
-    private function addHeaders(StreamReader $reader, ResponseInterface $message): ResponseInterface
+    private function addHeaders(Stream $reader, ResponseInterface $message): ResponseInterface
     {
         $line = trim($reader->readLine());
         while ($line) {
@@ -150,12 +145,16 @@ class HttpClient
         return $message;
     }
 
-    private function addBody(StreamReader $reader, ResponseInterface $message): ResponseInterface
+    private function addBody(Stream $reader, ResponseInterface $message): ResponseInterface
     {
         $body = $message->getBody();
         $length = $message->getHeader('content-length');
         if (empty($length)) {
-            $reader->copyAllTo($body);
+            $encoding = $message->getHeader('transfer-encoding');
+            if (empty($encoding) || strpos($encoding[0], 'chunked') === false) {
+                throw new Exception('Unknown body type', 400);
+            }
+            $reader->copyChunkedTo($body);
         }
         else {
             $length = $length[0];

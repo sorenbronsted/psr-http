@@ -4,12 +4,13 @@ namespace bronsted;
 
 use Closure;
 use Fiber;
-use SplDoublyLinkedList;
 use SplQueue;
 use function array_merge;
 use function count;
-use function microtime;
-use function usleep;
+use function readStream;
+use function writeStream;
+use function readStreamReady;
+use function writeStreamReady;
 
 class Scheduler
 {
@@ -23,14 +24,9 @@ class Scheduler
      */
     private static ?Scheduler $instance = null;
 
-    /**
-     * @var array fibers ready to be scheduled
-     */
-    private array $ready;
-
     public function __construct()
     {
-        $this->ready  = [];
+        $this->queue  = new SplQueue();
     }
 
     public static function instance(): Scheduler
@@ -61,9 +57,19 @@ class Scheduler
         $this->enqueue(readStream(...), $resource, $closure);
     }
 
+    public function onReadableReady(mixed $resource, Closure $closure)
+    {
+        $this->enqueue(readStreamReady(...), $resource, $closure);
+    }
+
     public function onWriteable(mixed $resource, Closure $closure)
     {
         $this->enqueue(writeStream(...), $resource, $closure);
+    }
+
+    public function onWriteableReady(mixed $resource, Closure $closure)
+    {
+        $this->enqueue(writeStreamReady(...), $resource, $closure);
     }
 
     public function onSignal(int $id, Closure $closure)
@@ -73,41 +79,21 @@ class Scheduler
 
     public function run()
     {
-        // the current queue to run
-        $current = $this->ready;
-        // ready is moved to current, so we can reset it for new fibers
-        $this->ready = [];
-        // Do we have anything to run
-        $n = count($current);
-        // Continue to run until no fibers a left
-        while($n > 0) {
-            $next = [];
-            // run the current queue
-            for($i = 0; $i < $n; $i++) {
-                $fiber = $current[$i];
-                if ($fiber->isSuspended()) {
-                    $fiber->resume();
-                }
-                if ($fiber->isTerminated()) {
-                    continue;
-                }
-                // fiber is not finished so it is scheduled next run
-                $next[] = $fiber;
+        while(!$this->queue->isEmpty()) {
+            $fiber = $this->queue->dequeue();
+            if ($fiber->isSuspended()) {
+                $fiber->resume();
             }
-            // by now thr current queue hold terminated fibers, which is ready for gc
-            // form the new queue
-            $current = array_merge($next, $this->ready);
-            // new fibers are scheduled
-            $this->ready = [];
-            // do we any any fibers
-            $n = count($current);
+            if (!$fiber->isTerminated()) {
+                $this->queue->enqueue($fiber);
+            }
         }
     }
 
     private function enqueue(Closure $closure, ...$args)
     {
         $fiber = new Fiber($closure);
-        $this->ready[] = $fiber;
+        $this->queue->enqueue($fiber);
         $fiber->start(...$args);
     }
 }

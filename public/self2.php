@@ -2,7 +2,7 @@
 require __DIR__ . '/../vendor/autoload.php';
 
 use bronsted\Scheduler;
-use bronsted\StreamReader;
+use bronsted\Stream;
 use bronsted\StreamWriter;
 
 function run() {
@@ -18,7 +18,7 @@ function run() {
         $con = stream_socket_accept($server);
         stream_set_blocking($con, false);
         echo "Connected $n\n";
-        $reader = new StreamReader($con);
+        $reader = new Stream($con);
         echo $reader->readLine();
         $reader->close();
 
