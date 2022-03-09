@@ -13,7 +13,7 @@ You can install this package via [Composer](http://getcomposer.org/):
 
 Server usage:
 
-```
+```php
 <?php
 require __DIR__ . '/vendor/autoload.php';
 
@@ -39,7 +39,7 @@ $server->run(function (ServerRequestInterface $request) use ($factory) {
 
 Client usage without fiber context:
 
-```
+```php
 <?php
 require __DIR__ . '/vendor/autoload.php';
 
