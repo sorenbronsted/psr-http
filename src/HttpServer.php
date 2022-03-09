@@ -23,7 +23,7 @@ class HttpServer
     private UploadedFileFactoryInterface $uploadFactory;
     private UriFactoryInterface $uriFactory;
     private StreamFactoryInterface $streamFactory;
-    private Scheduler $scheduler;
+    private FiberLoop $loop;
 
     public function __construct(
         string                        $interface,
@@ -42,18 +42,18 @@ class HttpServer
         $this->uploadFactory = $uploadFactory;
         $this->uriFactory = $uriFactory;
         $this->streamFactory = $streamFactory;
-        $this->scheduler = Scheduler::instance();
+        $this->loop = FiberLoop::instance();
     }
 
     public function run(Closure $callback)
     {
         $server = stream_socket_server('tcp://' . $this->interface . ':' . $this->port);
         if (!$server) {
-            exit(1);
+            throw new Exception("Create socket failed");
         }
         stream_set_blocking($server, false);
 
-        $this->scheduler->onReadable($server, function ($server) use ($callback) {
+        $this->loop->onReadable($server, function ($server) use ($callback) {
             $stream = stream_socket_accept($server, 5);
             if (!$stream || !is_resource($stream)) {
                 return;
@@ -61,12 +61,12 @@ class HttpServer
             stream_set_blocking($stream, false);
             $stream = new Stream($stream);
 
-            $this->scheduler->defer(function() use($stream, $callback) {
+            $this->loop->defer(function() use($stream, $callback) {
                 $this->work($stream, $callback);
             });
         });
 
-        $this->scheduler->run();
+        $this->loop->run();
     }
 
     private function work(Stream $stream, Closure $callback)

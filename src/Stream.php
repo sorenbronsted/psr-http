@@ -14,12 +14,12 @@ use function trim;
 class Stream
 {
     private mixed $stream;
-    private Scheduler $scheduler;
+    private FiberLoop $loop;
 
     public function __construct(mixed $stream)
     {
         $this->stream = $stream;
-        $this->scheduler = Scheduler::instance();
+        $this->loop = FiberLoop::instance();
     }
 
     public function close()
@@ -118,7 +118,7 @@ class Stream
     private function waitRead()
     {
         $suspend = new Suspend();
-        $this->scheduler->onReadableReady($this->stream, function() use($suspend) {
+        $this->loop->onReadableOnce($this->stream, function() use($suspend) {
             $suspend->done();
         });
         $suspend->wait();
@@ -127,7 +127,7 @@ class Stream
     private function waitWrite()
     {
         $suspend = new Suspend();
-        $this->scheduler->onWriteableReady($this->stream, function() use($suspend) {
+        $this->loop->onWriteableReady($this->stream, function() use($suspend) {
             $suspend->done();
         });
         $suspend->wait();

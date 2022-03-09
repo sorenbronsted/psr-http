@@ -3,13 +3,14 @@
 namespace bronsted;
 
 use Exception;
+use Psr\Http\Client\ClientInterface;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseFactoryInterface;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\UriInterface;
 use function strpos;
 
-class HttpClient
+class HttpClient implements ClientInterface
 {
     private ResponseFactoryInterface $responseFactory;
 
@@ -18,7 +19,7 @@ class HttpClient
         $this->responseFactory = $responseFactory;
     }
 
-    function fetch(RequestInterface $request): ResponseInterface
+    function sendRequest(RequestInterface $request): ResponseInterface
     {
         $stream = new Stream($this->connect($request->getUri()));
 

@@ -1,23 +1,27 @@
 {
-    "autoload": {
-        "psr-4": {
-            "bronsted\\":"src"
-        },
-        "files": [
-            "src/timer.php",
-            "src/stream.php",
-            "src/signal.php"
-        ]
+  "autoload": {
+    "psr-4": {
+      "bronsted\\": "src"
     },
-    "require": {
-        "php": "^8.1",
-        "nyholm/psr7": "^1.5",
-        "kekos/multipart-form-data-parser": "dev-master"
-    },
-    "require-dev": {
-        "phpunit/phpunit": "^9.5"
-    },
-    "repositories": [
-        {"type": "vcs","url": "https://github.com/sorenbronsted/multipart-form-data-parser.git"}
+    "files": [
     ]
+  },
+  "require": {
+    "php": "^8.1",
+    "kekos/multipart-form-data-parser": "dev-master",
+    "ext-pcntl": "*",
+    "bronsted/fiberloop": "^1.0",
+    "psr/http-client": "^1.0"
+  },
+  "require-dev": {
+    "phpunit/phpunit": "^9.5",
+    "nyholm/psr7": "^1.5",
+    "brain/monkey": "^2.6"
+  },
+  "repositories": [
+    {
+      "type": "vcs",
+      "url": "https://github.com/sorenbronsted/multipart-form-data-parser.git"
+    }
+  ]
 }
