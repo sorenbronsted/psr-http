@@ -1,4 +1,8 @@
 {
+  "name": "bronsted/psr-http",
+  "description": "Psr-http",
+  "type": "library",
+  "license": "MIT",
   "autoload": {
     "psr-4": {
       "bronsted\\": "src"
