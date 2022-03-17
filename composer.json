@@ -14,7 +14,7 @@
     "php": "^8.1",
     "kekos/multipart-form-data-parser": "dev-master",
     "ext-pcntl": "*",
-    "bronsted/fiberloop": "^1.0",
+    "bronsted/fiberloop": "^1.1",
     "psr/http-client": "^1.0"
   },
   "require-dev": {
