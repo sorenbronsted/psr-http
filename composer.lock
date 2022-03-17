@@ -8,16 +8,16 @@
     "packages": [
         {
             "name": "bronsted/fiberloop",
-            "version": "v1.1.1",
+            "version": "v1.2",
             "source": {
                 "type": "git",
                 "url": "https://github.com/sorenbronsted/fiberloop.git",
-                "reference": "e486e0ddd1f85a734fca2511e86607cdf3e152a3"
+                "reference": "1aeaab7a918168408bdefd8f45294e80da62933b"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/sorenbronsted/fiberloop/zipball/e486e0ddd1f85a734fca2511e86607cdf3e152a3",
-                "reference": "e486e0ddd1f85a734fca2511e86607cdf3e152a3",
+                "url": "https://api.github.com/repos/sorenbronsted/fiberloop/zipball/1aeaab7a918168408bdefd8f45294e80da62933b",
+                "reference": "1aeaab7a918168408bdefd8f45294e80da62933b",
                 "shasum": ""
             },
             "require": {
@@ -51,9 +51,9 @@
             "description": "Fiberloop",
             "support": {
                 "issues": "https://github.com/sorenbronsted/fiberloop/issues",
-                "source": "https://github.com/sorenbronsted/fiberloop/tree/v1.1.1"
+                "source": "https://github.com/sorenbronsted/fiberloop/tree/v1.2"
             },
-            "time": "2022-03-17T04:42:14+00:00"
+            "time": "2022-03-17T05:34:29+00:00"
         },
         {
             "name": "kekos/multipart-form-data-parser",
