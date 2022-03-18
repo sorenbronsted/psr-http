@@ -13,6 +13,7 @@ use Kekos\MultipartFormDataParser\Parser;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\StreamFactoryInterface;
 use function strlen;
+use function urldecode;
 
 class HttpServer
 {
@@ -175,10 +176,10 @@ class HttpServer
             $name = trim($parts[0]);
             $value = trim($parts[1]) ?? '';
             if (strtolower($name) == 'cookie') {
-                $parts = explode(';', $value);
+                $parts = explode('=', $value);
                 foreach ($parts as $part) {
                     $subParts = explode(':', $part);
-                    $cookies[$subParts[0]] = $subParts[1] ?? '';
+                    $cookies[$subParts[0]] = urldecode($subParts[1]) ?? '';
                 }
             } else {
                 $request = $request->withAddedHeader($name, $value);
