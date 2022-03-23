@@ -12,6 +12,7 @@ use Psr\Http\Message\UriFactoryInterface;
 use Kekos\MultipartFormDataParser\Parser;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\StreamFactoryInterface;
+use function stream_set_blocking;
 use function strlen;
 use function urldecode;
 
@@ -52,7 +53,7 @@ class HttpServer
         if (!$server) {
             throw new Exception("Create socket failed");
         }
-        stream_set_blocking($server, false);
+        stream_set_blocking($server, true);
 
         $this->loop->onReadable($server, function ($server) use ($callback) {
             $stream = stream_socket_accept($server, 5);
@@ -65,7 +66,7 @@ class HttpServer
             $this->loop->defer(function() use($stream, $callback) {
                 $this->work($stream, $callback);
             });
-        });
+        }, 5000);
 
         $this->loop->run();
     }
