@@ -12,9 +12,8 @@
   },
   "require": {
     "php": "^8.1",
-    "kekos/multipart-form-data-parser": "dev-master",
-    "ext-pcntl": "*",
-    "bronsted/fiberloop": "^1.2",
+    "kekos/multipart-form-data-parser": "^1.0",
+    "bronsted/fiberloop": "^2.0",
     "psr/http-client": "^1.0"
   },
   "require-dev": {
@@ -22,10 +21,8 @@
     "nyholm/psr7": "^1.5",
     "brain/monkey": "^2.6"
   },
-  "repositories": [
-    {
-      "type": "vcs",
-      "url": "https://github.com/sorenbronsted/multipart-form-data-parser.git"
-    }
-  ]
+  "scripts": {
+    "test": "vendor/bin/phpunit",
+    "coverage": "export XDEBUG_MODE=coverage; vendor/bin/phpunit --coverage-text"
+  }
 }

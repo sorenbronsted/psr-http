@@ -7,7 +7,7 @@ use Psr\Http\Message\ServerRequestInterface;
 use function Brain\Monkey\Functions\when;
 use function Brain\Monkey\tearDown;
 
-class TestHttpServer extends TestCase
+class HttpServerTest extends TestCase
 {
     protected function setUp(): void
     {
