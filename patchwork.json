@@ -1,6 +1,9 @@
 {
   "redefinable-internals": [
     "stream_socket_server",
-    "stream_socket_accept"
+    "stream_socket_accept",
+    "stream_socket_client",
+    "gethostbyname",
+    "fread"
   ]
 }

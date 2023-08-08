@@ -7,23 +7,32 @@ use Psr\Http\Client\ClientInterface;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseFactoryInterface;
 use Psr\Http\Message\ResponseInterface;
+use Psr\Http\Message\StreamFactoryInterface;
 use Psr\Http\Message\UriInterface;
 use function strpos;
 
 class HttpClient implements ClientInterface
 {
     private ResponseFactoryInterface $responseFactory;
+    private StreamSocketFactory $streamSocketFactory;
 
-    public function __construct(ResponseFactoryInterface $responseFactory)
+    public function __construct(ResponseFactoryInterface $responseFactory, StreamSocketFactory $stream)
     {
         $this->responseFactory = $responseFactory;
+        $this->streamSocketFactory = $stream;
     }
 
     function sendRequest(RequestInterface $request): ResponseInterface
     {
-        $stream = new Stream($this->connect($request->getUri()));
+        $stream = $this->streamSocketFactory->createStreamSocket($this->connect($request->getUri()));
 
         $request = $request->withHeader('Connection', 'close');
+
+        $contentLength = $request->getBody()->getSize();
+        if ($contentLength > 0) {
+            $request = $request->withAddedHeader('Content-Length', $contentLength);
+        }
+
         $this->writeRequest($stream, $request);
 
         $response = $this->readReponse($stream);
@@ -71,11 +80,11 @@ class HttpClient implements ClientInterface
         return $connection;
     }
 
-    private function writeRequest(Stream $writer, RequestInterface $request)
+    private function writeRequest(StreamSocket $writer, RequestInterface $request)
     {
         $crlf = "\r\n";
-        $uri = $request->getUri();
 
+        $uri = $request->getUri();
         $url = $uri->getPath();
         if (empty($url) || $url[0] != '/') {
             $url = $url . '/';
@@ -100,7 +109,7 @@ class HttpClient implements ClientInterface
         $writer->copyFrom($request->getBody());
     }
 
-    private function readReponse(Stream $reader): ResponseInterface
+    private function readReponse(StreamSocket $reader): ResponseInterface
     {
         $response = $this->responseFactory->createResponse();
         $response = $this->addResponseStartLine($reader, $response);
@@ -108,7 +117,7 @@ class HttpClient implements ClientInterface
         return $this->addBody($reader, $response);
     }
 
-    private function addResponseStartLine(Stream $reader, $response): ResponseInterface
+    private function addResponseStartLine(StreamSocket $reader, $response): ResponseInterface
     {
         $line = $reader->readLine();
         if (empty($line)) {
@@ -133,7 +142,7 @@ class HttpClient implements ClientInterface
         return $response->withProtocolVersion($parts[1])->withStatus($statusCode);
     }
 
-    private function addHeaders(Stream $reader, ResponseInterface $message): ResponseInterface
+    private function addHeaders(StreamSocket $reader, ResponseInterface $message): ResponseInterface
     {
         $line = trim($reader->readLine());
         while ($line) {
@@ -146,7 +155,7 @@ class HttpClient implements ClientInterface
         return $message;
     }
 
-    private function addBody(Stream $reader, ResponseInterface $message): ResponseInterface
+    private function addBody(StreamSocket $reader, ResponseInterface $message): ResponseInterface
     {
         $body = $message->getBody();
         $length = $message->getHeader('content-length');

@@ -61,7 +61,7 @@ class HttpServer
                 return;
             }
             stream_set_blocking($stream, false);
-            $stream = new Stream($stream);
+            $stream = new StreamSocket($stream);
 
             $this->loop->defer(function() use($stream, $callback) {
                 $this->work($stream, $callback);
@@ -71,7 +71,7 @@ class HttpServer
         $this->loop->run();
     }
 
-    private function work(Stream $stream, Closure $callback)
+    private function work(StreamSocket $stream, Closure $callback)
     {
         $request = $response = null;
         try {
@@ -97,7 +97,7 @@ class HttpServer
         $stream->close();
     }
 
-    private function writeResponse(Stream $writer, ResponseInterface $response)
+    private function writeResponse(StreamSocket $writer, ResponseInterface $response)
     {
         $crlf = "\r\n";
 
@@ -129,7 +129,7 @@ class HttpServer
         }
     }
 
-    private function createRequest(Stream $reader): ServerRequestInterface
+    private function createRequest(StreamSocket $reader): ServerRequestInterface
     {
         $line = $reader->readLine();
         if (!$line) {
@@ -168,7 +168,7 @@ class HttpServer
         return $this->requestFactory->createServerRequest($method, $uri)->withQueryParams($query);
     }
 
-    private function addHeaders(Stream $reader, ServerRequestInterface $request): ServerRequestInterface
+    private function addHeaders(StreamSocket $reader, ServerRequestInterface $request): ServerRequestInterface
     {
         $line = trim($reader->readLine());
         $cookies = [];
@@ -190,7 +190,7 @@ class HttpServer
         return $request->withCookieParams($cookies);
     }
 
-    private function addBody(Stream $reader, ServerRequestInterface $request): ServerRequestInterface
+    private function addBody(StreamSocket $reader, ServerRequestInterface $request): ServerRequestInterface
     {
         $length = $request->getHeader('content-length');
         $type = $request->getHeader('content-type');

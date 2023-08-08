@@ -11,7 +11,7 @@ use function strlen;
 use function substr;
 use function trim;
 
-class Stream
+class StreamSocket
 {
     private mixed $stream;
     private FiberLoop $loop;

@@ -37,7 +37,7 @@ $server->run(function (ServerRequestInterface $request) use ($factory) {
 });
 ```
 
-Client usage without fiber context:
+Standalone client usage context:
 
 ```php
 <?php

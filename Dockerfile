@@ -1,5 +1,4 @@
 FROM php:8-cli
-RUN pecl install xdebug-3.2.0 && docker-php-ext-enable xdebug
-COPY xdebug.ini /usr/local/etc/php/conf.d/docker-php-ext-xdebug.ini
-# VOLUME /app
+ADD https://github.com/mlocati/docker-php-extension-installer/releases/latest/download/install-php-extensions /usr/local/bin/
+RUN chmod +x /usr/local/bin/install-php-extensions && install-php-extensions xdebug @composer
 WORKDIR /app
