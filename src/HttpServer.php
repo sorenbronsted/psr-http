@@ -197,7 +197,7 @@ class HttpServer
         if (empty($length) || empty($type)) {
             return $request;
         }
-        $length = $length[0];
+        $length = intval($length[0]);
         $body = $request->getBody();
         $reader->copyTo($body, $length);
         $body->rewind();
