@@ -65,7 +65,7 @@ class HttpClient implements ClientInterface
         // establish TCP/IP connection (non-blocking)
         $errno = 0;
         $errstr = '';
-        $connection = stream_socket_client(
+        $connection = @stream_socket_client(
             $address,
             $errno,
             $errstr,

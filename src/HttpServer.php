@@ -49,7 +49,7 @@ class HttpServer
 
     public function run(Closure $callback)
     {
-        $server = stream_socket_server('tcp://' . $this->interface . ':' . $this->port);
+        $server = @stream_socket_server('tcp://' . $this->interface . ':' . $this->port);
         if (!$server) {
             throw new Exception("Create socket failed");
         }
