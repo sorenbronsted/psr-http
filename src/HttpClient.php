@@ -9,6 +9,7 @@ use Psr\Http\Message\ResponseFactoryInterface;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\StreamFactoryInterface;
 use Psr\Http\Message\UriInterface;
+use Throwable;
 use function strpos;
 
 class HttpClient implements ClientInterface
@@ -24,20 +25,25 @@ class HttpClient implements ClientInterface
 
     function sendRequest(RequestInterface $request): ResponseInterface
     {
-        $stream = $this->streamSocketFactory->createStreamSocket($this->connect($request->getUri()));
+        try {
+            $stream = $this->streamSocketFactory->createStreamSocket($this->connect($request->getUri()));
 
-        $request = $request->withHeader('Connection', 'close');
+            $request = $request->withHeader('Connection', 'close');
 
-        $contentLength = $request->getBody()->getSize();
-        if ($contentLength > 0) {
-            $request = $request->withAddedHeader('Content-Length', $contentLength);
+            $contentLength = $request->getBody()->getSize();
+            if ($contentLength > 0) {
+                $request = $request->withAddedHeader('Content-Length', $contentLength);
+            }
+
+            $this->writeRequest($stream, $request);
+
+            $response = $this->readReponse($stream);
+            $stream->close();
+            return $response;
         }
-
-        $this->writeRequest($stream, $request);
-
-        $response = $this->readReponse($stream);
-        $stream->close();
-        return $response;
+        catch (Throwable $th) {
+            throw $th;
+        }
     }
 
     private function connect(UriInterface $uri)
