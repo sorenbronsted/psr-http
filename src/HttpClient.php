@@ -75,7 +75,7 @@ class HttpClient implements ClientInterface
             $address,
             $errno,
             $errstr,
-            PHP_INT_MAX, // not used because this a non blocking stream
+            0.5,
             STREAM_CLIENT_CONNECT | STREAM_CLIENT_ASYNC_CONNECT,
             $context
         );
