@@ -169,10 +169,9 @@ class HttpClient implements ClientInterface
         $length = $message->getHeader('content-length');
         if (empty($length)) {
             $encoding = $message->getHeader('transfer-encoding');
-            if (empty($encoding) || strpos($encoding[0], 'chunked') === false) {
-                throw new Exception('Unknown body type', 400);
+            if (!empty($encoding) and strpos($encoding[0], 'chunked') !== false) {
+                $reader->copyChunkedTo($body);
             }
-            $reader->copyChunkedTo($body);
         }
         else {
             $length = $length[0];
