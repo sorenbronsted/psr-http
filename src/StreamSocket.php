@@ -2,6 +2,7 @@
 
 namespace bronsted;
 
+use Exception;
 use Psr\Http\Message\StreamInterface;
 use function feof;
 use function fread;
@@ -32,7 +33,10 @@ class StreamSocket
         $result = '';
         $stop = false;
         while(!$stop && !feof($this->stream)) {
-            $byte = fread($this->stream, 1);
+            $byte = @fread($this->stream, 1);
+            if ($byte === false) {
+                throw new Exception('fread failed');
+            }
             if (strlen($byte) == 0) {
                 $this->waitRead();
             }
@@ -49,7 +53,10 @@ class StreamSocket
         $result = '';
         $pos = 0;
         while($pos < $length && !feof($this->stream)) {
-            $bytes = fread($this->stream, $length - $pos);
+            $bytes = @fread($this->stream, $length - $pos);
+            if ($bytes === false) {
+                throw new Exception('fread failed');
+            }
             if (strlen($bytes) == 0) {
                 $this->waitRead();
             }
@@ -65,7 +72,11 @@ class StreamSocket
     {
         $pos = 0;
         while($pos < $length && !feof($this->stream)) {
-            $written = $destination->write(fread($this->stream, $length - $pos));
+            $bytes = @fread($this->stream, $length - $pos);
+            if ($bytes === false) {
+                throw new Exception('fread failed');
+            }
+            $written = $destination->write($bytes);
             if ($written == 0) {
                 $this->waitRead();
             }
@@ -93,7 +104,10 @@ class StreamSocket
         $length = strlen($string);
         $pos = 0;
         while ($pos < $length && !feof($this->stream)) {
-            $written = fwrite($this->stream, substr($string, $pos, $length - $pos));
+            $written = @fwrite($this->stream, substr($string, $pos, $length - $pos));
+            if ($written === false) {
+                throw new Exception('fwrite failed');
+            }
             if ($written == 0) {
                 $this->waitWrite();
             }
@@ -107,7 +121,10 @@ class StreamSocket
         $pos = 0;
         while (!$source->eof() && $pos < $source->getSize() && !feof($this->stream)) {
             $source->seek($pos);
-            $written = fwrite($this->stream, $source->read($source->getSize() - $pos));
+            $written = @fwrite($this->stream, $source->read($source->getSize() - $pos));
+            if ($written === false) {
+                throw new Exception('fwrite failed');
+            }
             if ($written == 0) {
                 $this->waitWrite();
             }

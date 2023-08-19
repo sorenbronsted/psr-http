@@ -87,14 +87,16 @@ class HttpServer
             $response = $this->responseFactory->createResponse($code);
         }
 
-        // call callback if we don't have a response already
-        if (empty($response)) {
-            $response = $callback->call($this, $request);
+        try {
+            // call callback if we don't have a response already
+            if (empty($response)) {
+                $response = $callback->call($this, $request);
+            }
+            // response to buffer
+            $this->writeResponse($stream, $response);
+        } finally {
+            $stream->close();
         }
-
-        // response to buffer
-        $this->writeResponse($stream, $response);
-        $stream->close();
     }
 
     private function writeResponse(StreamSocket $writer, ResponseInterface $response)

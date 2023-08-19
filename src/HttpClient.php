@@ -25,6 +25,7 @@ class HttpClient implements ClientInterface
 
     function sendRequest(RequestInterface $request): ResponseInterface
     {
+        $stream = null;
         try {
             $stream = $this->streamSocketFactory->createStreamSocket($this->connect($request->getUri()));
 
@@ -42,6 +43,7 @@ class HttpClient implements ClientInterface
             return $response;
         }
         catch (Throwable $th) {
+            $stream?->close();
             throw $th;
         }
     }
