@@ -16,11 +16,13 @@ class HttpClient implements ClientInterface
 {
     private ResponseFactoryInterface $responseFactory;
     private StreamSocketFactory $streamSocketFactory;
+    private int $timeout = 5;
 
-    public function __construct(ResponseFactoryInterface $responseFactory, StreamSocketFactory $stream)
+    public function __construct(ResponseFactoryInterface $responseFactory, StreamSocketFactory $stream, int $timeout = 5)
     {
         $this->responseFactory = $responseFactory;
         $this->streamSocketFactory = $stream;
+        $this->timeout = $timeout;
     }
 
     function sendRequest(RequestInterface $request): ResponseInterface
@@ -77,7 +79,7 @@ class HttpClient implements ClientInterface
             $address,
             $errno,
             $errstr,
-            0.5,
+            $this->timeout,
             STREAM_CLIENT_CONNECT | STREAM_CLIENT_ASYNC_CONNECT,
             $context
         );
