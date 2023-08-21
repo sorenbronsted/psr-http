@@ -12,6 +12,7 @@ use Psr\Http\Message\UriFactoryInterface;
 use Kekos\MultipartFormDataParser\Parser;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\StreamFactoryInterface;
+use Psr\Log\LoggerInterface;
 use function stream_set_blocking;
 use function strlen;
 use function urldecode;
@@ -26,6 +27,7 @@ class HttpServer
     private UriFactoryInterface $uriFactory;
     private StreamFactoryInterface $streamFactory;
     private FiberLoop $loop;
+    private LoggerInterface $log;
 
     public function __construct(
         string                        $interface,
@@ -34,9 +36,11 @@ class HttpServer
         ResponseFactoryInterface      $responseFactory,
         UploadedFileFactoryInterface  $uploadFactory,
         UriFactoryInterface           $uriFactory,
-        StreamFactoryInterface        $streamFactory
+        StreamFactoryInterface        $streamFactory,
+        LoggerInterface               $log
     )
     {
+        $this->loop = FiberLoop::instance();
         $this->interface = $interface;
         $this->port = $port;
         $this->requestFactory = $requestFactory;
@@ -44,7 +48,7 @@ class HttpServer
         $this->uploadFactory = $uploadFactory;
         $this->uriFactory = $uriFactory;
         $this->streamFactory = $streamFactory;
-        $this->loop = FiberLoop::instance();
+        $this->log = $log;
     }
 
     public function run(Closure $callback)
@@ -64,7 +68,9 @@ class HttpServer
             $stream = new StreamSocket($stream);
 
             $this->loop->defer(function() use($stream, $callback) {
+                $start = microtime(true);
                 $this->work($stream, $callback);
+                $this->log->debug("HttpServer request time {time}", ['time' => (microtime(true) - $start)]);
             });
         }, 5000);
 

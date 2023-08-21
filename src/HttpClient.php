@@ -9,6 +9,7 @@ use Psr\Http\Message\ResponseFactoryInterface;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\StreamFactoryInterface;
 use Psr\Http\Message\UriInterface;
+use Psr\Log\LoggerInterface;
 use Throwable;
 use function strpos;
 
@@ -16,17 +17,21 @@ class HttpClient implements ClientInterface
 {
     private ResponseFactoryInterface $responseFactory;
     private StreamSocketFactory $streamSocketFactory;
+
+    private LoggerInterface $log;
     private int $timeout = 5;
 
-    public function __construct(ResponseFactoryInterface $responseFactory, StreamSocketFactory $stream, int $timeout = 5)
+    public function __construct(ResponseFactoryInterface $responseFactory, StreamSocketFactory $stream, LoggerInterface $log, int $timeout = 5)
     {
         $this->responseFactory = $responseFactory;
         $this->streamSocketFactory = $stream;
+        $this->log = $log;
         $this->timeout = $timeout;
     }
 
     function sendRequest(RequestInterface $request): ResponseInterface
     {
+        $start = microtime(true);
         $stream = null;
         try {
             $stream = $this->streamSocketFactory->createStreamSocket($this->connect($request->getUri()));
@@ -42,11 +47,14 @@ class HttpClient implements ClientInterface
 
             $response = $this->readReponse($stream);
             $stream->close();
+            $this->log->debug("HttpClient request {uri} time {time} ",
+                ['uri' => $request->getUri(),'time' => (microtime(true) - $start)]);
             return $response;
         }
-        catch (Throwable $th) {
+        catch (Exception $e) {
             $stream?->close();
-            throw $th;
+            $this->log->error('Failed {uri} {exception}', ['uri' => $request->getUri(), 'exception' => $e]);
+            throw $e;
         }
     }
 

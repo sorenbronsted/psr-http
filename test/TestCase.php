@@ -28,7 +28,6 @@ class TestCase extends FrameworkTestCase
         $this->container->set(StreamFactoryInterface::class, $psr17Factory);
 
         $this->logger = new TestLogger();
-        Log::setInstance($this->logger);
     }
 
     protected function mock(string $class): MockObject
