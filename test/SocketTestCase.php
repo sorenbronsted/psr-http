@@ -4,6 +4,7 @@ namespace bronsted;
 
 use Nyholm\Psr7\Factory\Psr17Factory;
 use PHPUnit\Framework\TestCase as FrameworkTestCase;
+use Psr\Log\LoggerInterface;
 
 abstract class SocketTestCase extends FrameworkTestCase
 {
@@ -51,9 +52,9 @@ abstract class SocketTestCase extends FrameworkTestCase
         return (new \ReflectionMethod($object, $method))->invoke($object, ...$arguments);
     }
 
-    protected function server(int $maxHeaders = 65536, int $maxBody = 8388608): HttpServer
+    protected function server(int $maxHeaders = 65536, int $maxBody = 8388608, ?LoggerInterface $log = null): HttpServer
     {
         return new HttpServer('127.0.0.1', 0, $this->factory, $this->factory, $this->factory,
-            $this->factory, $this->factory, $maxHeaders, $maxBody);
+            $this->factory, $this->factory, $log, maxHeaderBytes: $maxHeaders, maxBodyBytes: $maxBody);
     }
 }

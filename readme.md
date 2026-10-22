@@ -65,6 +65,14 @@ FiberLoop::instance()->run();
 
 ## HTTP behavior and limits
 
+The v2.0 logger and timeout constructor arguments remain supported. `HttpClient`
+accepts an optional PSR-3 logger as its third argument and a connection timeout in
+seconds as its fourth argument (default `5`). `HttpServer` accepts an optional
+PSR-3 logger after its seven factory/address arguments, before the optional size
+limits. Omitting the logger uses a `NullLogger`. Request timing and failures are
+logged without allowing a logging backend failure to interrupt HTTP processing.
+The standalone static `Log` helper remains available for compatibility.
+
 The server handles one request per connection and sends `Connection: close`.
 Exceptions from a request handler produce a `500` response; a disconnected client
 or failed response write does not stop the server's event loop.

@@ -2,11 +2,13 @@
 
 namespace bronsted;
 
+use ColinODell\PsrTestLogger\TestLogger;
 use Nyholm\Psr7\Factory\Psr17Factory;
 use Psr\Http\Client\ClientExceptionInterface;
 use Psr\Http\Client\NetworkExceptionInterface;
 use Psr\Http\Client\RequestExceptionInterface;
 use Psr\Http\Message\StreamInterface;
+use Psr\Log\LoggerInterface;
 use function Brain\Monkey\Functions\when;
 
 class HttpClientFailureTest extends TestCase
@@ -31,13 +33,13 @@ class HttpClientFailureTest extends TestCase
         return $resource;
     }
 
-    private function client(StreamSocket $socket): HttpClient
+    private function client(StreamSocket $socket, ?LoggerInterface $log = null): HttpClient
     {
         when('gethostbyname')->justReturn('127.0.0.1');
         when('stream_socket_client')->justReturn($this->resource());
         $factory = $this->createMock(StreamSocketFactory::class);
         $factory->method('createStreamSocket')->willReturn($socket);
-        return new HttpClient(new Psr17Factory(), $factory);
+        return new HttpClient(new Psr17Factory(), $factory, $log);
     }
 
     /** @dataProvider failures */
@@ -155,5 +157,95 @@ class HttpClientFailureTest extends TestCase
         $this->assertStringContainsString("Content-Length: 3\r\n", $wire);
         $this->assertStringContainsString("Host: example.test:8081\r\n", $wire);
         $this->assertStringNotContainsString('Transfer-Encoding:', $wire);
+    }
+
+    /** @dataProvider connectionTimeouts */
+    public function testV20LoggerAndTimeoutArgumentsRemainSupported(?int $timeout)
+    {
+        $connection = $this->resource();
+        $seenTimeout = null;
+        when('gethostbyname')->justReturn('127.0.0.1');
+        when('stream_socket_client')->alias(function(...$arguments) use ($connection, &$seenTimeout) {
+            $seenTimeout = $arguments[3];
+            return $connection;
+        });
+        $socket = $this->createMock(StreamSocket::class);
+        $socket->method('readLine')->willReturn("HTTP/1.1 200 OK\r\n", "Content-Length: 0\r\n", "\r\n");
+        $socket->expects($this->once())->method('close');
+        $streamFactory = $this->createMock(StreamSocketFactory::class);
+        $streamFactory->method('createStreamSocket')->willReturn($socket);
+        $factory = new Psr17Factory();
+        $logger = new TestLogger();
+        $client = $timeout === null
+            ? new HttpClient($factory, $streamFactory, $logger)
+            : new HttpClient($factory, $streamFactory, $logger, $timeout);
+        $request = $factory->createRequest('GET', 'http://example.test/');
+
+        $response = $client->sendRequest($request);
+
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame($timeout ?? 5, $seenTimeout);
+        $this->assertCount(1, $logger->records);
+        $this->assertSame('debug', $logger->records[0]['level']);
+        $this->assertSame($request->getUri(), $logger->records[0]['context']['uri']);
+        $this->assertIsFloat($logger->records[0]['context']['time']);
+    }
+
+    public static function connectionTimeouts(): array
+    {
+        return ['v2.0 default' => [null], 'zero' => [0], 'custom' => [7]];
+    }
+
+    public function testNetworkFailureIsLoggedWithTheReturnedException()
+    {
+        $cause = new SocketException('connection lost');
+        $socket = $this->createMock(StreamSocket::class);
+        $socket->method('readLine')->willThrowException($cause);
+        $socket->expects($this->once())->method('close');
+        $logger = new TestLogger();
+        $client = $this->client($socket, $logger);
+        $request = (new Psr17Factory())->createRequest('GET', 'http://example.test/');
+
+        try {
+            $client->sendRequest($request);
+            $this->fail('Expected network failure');
+        }
+        catch (NetworkExceptionInterface $error) {
+            $this->assertCount(1, $logger->records);
+            $this->assertSame('error', $logger->records[0]['level']);
+            $this->assertSame($error, $logger->records[0]['context']['exception']);
+            $this->assertSame($cause, $error->getPrevious());
+        }
+    }
+
+    public function testLoggingFailureDoesNotChangeASuccessfulResponse()
+    {
+        $logger = $this->createMock(LoggerInterface::class);
+        $logger->expects($this->once())->method('debug')->willThrowException(new \RuntimeException('logger failed'));
+        $socket = $this->createMock(StreamSocket::class);
+        $socket->method('readLine')->willReturn("HTTP/1.1 200 OK\r\n", "Content-Length: 0\r\n", "\r\n");
+        $client = $this->client($socket, $logger);
+
+        $response = $client->sendRequest((new Psr17Factory())->createRequest('GET', 'http://example.test/'));
+
+        $this->assertSame(200, $response->getStatusCode());
+    }
+
+    public function testLoggingFailureDoesNotReplaceANetworkFailure()
+    {
+        $logger = $this->createMock(LoggerInterface::class);
+        $logger->expects($this->once())->method('error')->willThrowException(new \RuntimeException('logger failed'));
+        $cause = new SocketException('connection lost');
+        $socket = $this->createMock(StreamSocket::class);
+        $socket->method('readLine')->willThrowException($cause);
+        $client = $this->client($socket, $logger);
+
+        try {
+            $client->sendRequest((new Psr17Factory())->createRequest('GET', 'http://example.test/'));
+            $this->fail('Expected network failure');
+        }
+        catch (NetworkExceptionInterface $error) {
+            $this->assertSame($cause, $error->getPrevious());
+        }
     }
 }

@@ -8,6 +8,8 @@ use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseFactoryInterface;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\UriInterface;
+use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 use Throwable;
 use UnexpectedValueException;
 
@@ -15,16 +17,28 @@ class HttpClient implements ClientInterface
 {
     private ResponseFactoryInterface $responseFactory;
     private StreamSocketFactory $streamSocketFactory;
+    private LoggerInterface $log;
+    private int $timeout;
 
-    public function __construct(ResponseFactoryInterface $responseFactory, StreamSocketFactory $stream)
-    {
+    public function __construct(
+        ResponseFactoryInterface $responseFactory,
+        StreamSocketFactory $stream,
+        ?LoggerInterface $log = null,
+        int $timeout = 5
+    ) {
+        if ($timeout < 0) {
+            throw new \InvalidArgumentException('Connect timeout must be non-negative');
+        }
         $this->responseFactory = $responseFactory;
         $this->streamSocketFactory = $stream;
+        $this->log = $log ?? new NullLogger();
+        $this->timeout = $timeout;
     }
 
     public function sendRequest(RequestInterface $request): ResponseInterface
     {
         $original = $request;
+        $start = microtime(true);
         $stream = $connection = null;
         try {
             try {
@@ -56,16 +70,21 @@ class HttpClient implements ClientInterface
             catch (Throwable $error) {
                 throw new RequestException($original, $error->getMessage(), $error);
             }
-            return $this->readReponse($stream, $request->getMethod());
-        }
-        catch (ClientExceptionInterface $error) {
-            throw $error;
-        }
-        catch (SocketException $error) {
-            throw new NetworkException($original, $error->getMessage(), $error);
+            $response = $this->readReponse($stream, $request->getMethod());
+            $this->writeLog('debug', 'HttpClient request {uri} time {time} ', [
+                'uri' => $original->getUri(),
+                'time' => microtime(true) - $start,
+            ]);
+            return $response;
         }
         catch (Throwable $error) {
-            throw new ClientException($original, $error->getMessage(), $error);
+            if (!$error instanceof ClientExceptionInterface) {
+                $error = $error instanceof SocketException
+                    ? new NetworkException($original, $error->getMessage(), $error)
+                    : new ClientException($original, $error->getMessage(), $error);
+            }
+            $this->writeLog('error', 'Failed {uri} {exception}', ['uri' => $original->getUri(), 'exception' => $error]);
+            throw $error;
         }
         finally {
             if ($stream !== null) {
@@ -79,6 +98,16 @@ class HttpClient implements ClientInterface
             if (is_resource($connection)) {
                 fclose($connection);
             }
+        }
+    }
+
+    private function writeLog(string $level, string $message, array $context): void
+    {
+        try {
+            $this->log->$level($message, $context);
+        }
+        catch (Throwable $error) {
+            // A logging backend must not change the HTTP result or mask its error.
         }
     }
 
@@ -110,7 +139,7 @@ class HttpClient implements ClientInterface
             $address,
             $errno,
             $errstr,
-            0.5,
+            $this->timeout,
             STREAM_CLIENT_CONNECT | STREAM_CLIENT_ASYNC_CONNECT,
             $context
         );

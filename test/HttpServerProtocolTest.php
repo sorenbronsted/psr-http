@@ -2,7 +2,9 @@
 
 namespace bronsted;
 
+use ColinODell\PsrTestLogger\TestLogger;
 use Psr\Http\Message\StreamInterface;
+use Psr\Log\LoggerInterface;
 
 class HttpServerProtocolTest extends SocketTestCase
 {
@@ -14,16 +16,49 @@ class HttpServerProtocolTest extends SocketTestCase
         $this->assertSame($server->getFiberLoop(), $server->getFiberLoop());
     }
 
-    private function respond(string $wire, ?\Closure $handler = null, int $maxHeaders = 65536, int $maxBody = 8388608): string
+    private function respond(string $wire, ?\Closure $handler = null, int $maxHeaders = 65536, int $maxBody = 8388608, ?LoggerInterface $log = null): string
     {
         [$server, $client] = $this->pair();
         fwrite($client, $wire);
         stream_socket_shutdown($client, STREAM_SHUT_WR);
         $factory = $this->factory;
         $handler ??= function() use ($factory) { return $factory->createResponse(); };
-        $this->invoke($this->server($maxHeaders, $maxBody), 'work', new StreamSocket($server), $handler);
+        $this->invoke($this->server($maxHeaders, $maxBody, $log), 'work', new StreamSocket($server), $handler);
         $this->assertFalse(is_resource($server));
         return stream_get_contents($client);
+    }
+
+    public function testV20LoggerArgumentRecordsRequestTiming()
+    {
+        $logger = new TestLogger();
+        $response = $this->respond("GET / HTTP/1.1\r\n\r\n", log: $logger);
+
+        $this->assertStringStartsWith('HTTP/1.1 200 ', $response);
+        $this->assertCount(1, $logger->records);
+        $this->assertSame('debug', $logger->records[0]['level']);
+        $this->assertSame('HttpServer request time {time}', $logger->records[0]['message']);
+        $this->assertIsFloat($logger->records[0]['context']['time']);
+    }
+
+    public function testHandlerFailureIsLoggedAndStillReturns500()
+    {
+        $logger = new TestLogger();
+        $cause = new \RuntimeException('handler failed');
+        $response = $this->respond("GET / HTTP/1.1\r\n\r\n", function() use ($cause) { throw $cause; }, log: $logger);
+
+        $this->assertStringStartsWith('HTTP/1.1 500 ', $response);
+        $this->assertSame($cause, $logger->recordsByLevel['error'][0]['context']['exception']);
+        $this->assertTrue($logger->hasDebugRecords());
+    }
+
+    public function testLoggerFailuresDoNotEscapeOrPreventTheErrorResponse()
+    {
+        $logger = $this->createMock(LoggerInterface::class);
+        $logger->expects($this->once())->method('error')->willThrowException(new \RuntimeException('logger failed'));
+        $logger->expects($this->once())->method('debug')->willThrowException(new \RuntimeException('logger failed'));
+        $response = $this->respond("GET / HTTP/1.1\r\n\r\n", function() { throw new \RuntimeException('handler failed'); }, log: $logger);
+
+        $this->assertStringStartsWith('HTTP/1.1 500 ', $response);
     }
 
     /** @dataProvider handlerErrors */

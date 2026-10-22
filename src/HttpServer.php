@@ -13,6 +13,8 @@ use Psr\Http\Message\ServerRequestInterface;
 use Psr\Http\Message\StreamFactoryInterface;
 use Psr\Http\Message\UploadedFileFactoryInterface;
 use Psr\Http\Message\UriFactoryInterface;
+use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 use Throwable;
 
 class HttpServer
@@ -27,6 +29,7 @@ class HttpServer
     private FiberLoop $loop;
     private int $maxHeaderBytes;
     private int $maxBodyBytes;
+    private LoggerInterface $log;
 
     public function __construct(
         string $interface,
@@ -36,6 +39,7 @@ class HttpServer
         UploadedFileFactoryInterface $uploadFactory,
         UriFactoryInterface $uriFactory,
         StreamFactoryInterface $streamFactory,
+        ?LoggerInterface $log = null,
         int $maxHeaderBytes = 65536,
         int $maxBodyBytes = 8388608
     ) {
@@ -49,6 +53,7 @@ class HttpServer
         $this->uploadFactory = $uploadFactory;
         $this->uriFactory = $uriFactory;
         $this->streamFactory = $streamFactory;
+        $this->log = $log ?? new NullLogger();
         $this->maxHeaderBytes = $maxHeaderBytes;
         $this->maxBodyBytes = $maxBodyBytes;
         $this->loop = FiberLoop::instance();
@@ -107,6 +112,7 @@ class HttpServer
 
     private function work(StreamSocket $stream, Closure $callback)
     {
+        $start = microtime(true);
         $request = null;
         try {
             try {
@@ -121,6 +127,7 @@ class HttpServer
                     $code = $error instanceof Exception ? 400 : 500;
                 }
                 $response = $this->responseFactory->createResponse($code);
+                $this->writeLog($code < 500 ? 'warning' : 'error', 'HttpServer invalid request {exception}', ['exception' => $error]);
             }
 
             if ($response === null) {
@@ -131,17 +138,30 @@ class HttpServer
                     }
                 }
                 catch (Throwable $error) {
+                    $this->writeLog('error', 'HttpServer handler failed {exception}', ['exception' => $error]);
                     $response = $this->responseFactory->createResponse(500);
                 }
             }
             $this->writeResponse($stream, $response, $request?->getMethod() === 'HEAD');
         }
         catch (Throwable $error) {
+            $this->writeLog('error', 'HttpServer response failed {exception}', ['exception' => $error]);
             // A disconnected peer or broken response stream must not stop the
             // listener. A partially written response cannot safely be replaced.
         }
         finally {
             $stream->close();
+            $this->writeLog('debug', 'HttpServer request time {time}', ['time' => microtime(true) - $start]);
+        }
+    }
+
+    private function writeLog(string $level, string $message, array $context): void
+    {
+        try {
+            $this->log->$level($message, $context);
+        }
+        catch (Throwable $error) {
+            // Logging must not stop request processing or the shared event loop.
         }
     }
 
