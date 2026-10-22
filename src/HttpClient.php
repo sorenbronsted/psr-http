@@ -2,15 +2,14 @@
 
 namespace bronsted;
 
-use Exception;
+use Psr\Http\Client\ClientExceptionInterface;
 use Psr\Http\Client\ClientInterface;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseFactoryInterface;
 use Psr\Http\Message\ResponseInterface;
-use Psr\Http\Message\StreamFactoryInterface;
 use Psr\Http\Message\UriInterface;
 use Throwable;
-use function strpos;
+use UnexpectedValueException;
 
 class HttpClient implements ClientInterface
 {
@@ -23,54 +22,88 @@ class HttpClient implements ClientInterface
         $this->streamSocketFactory = $stream;
     }
 
-    function sendRequest(RequestInterface $request): ResponseInterface
+    public function sendRequest(RequestInterface $request): ResponseInterface
     {
-        $stream = null;
+        $original = $request;
+        $stream = $connection = null;
         try {
-            $stream = $this->streamSocketFactory->createStreamSocket($this->connect($request->getUri()));
-
-            $request = $request->withHeader('Connection', 'close');
-
-            $contentLength = $request->getBody()->getSize();
-            if ($contentLength > 0) {
-                $request = $request->withAddedHeader('Content-Length', $contentLength);
+            try {
+                $uri = $request->getUri();
+                if (!in_array(strtolower($uri->getScheme()), ['http', 'https'], true) || $uri->getHost() === '') {
+                    throw new \InvalidArgumentException('An absolute HTTP or HTTPS URI is required');
+                }
+                $contentLength = $request->getBody()->getSize();
+                if ($contentLength === null || $contentLength < 0) {
+                    throw new \InvalidArgumentException('Request body size must be known');
+                }
+                $request = $request->withHeader('Connection', 'close')->withoutHeader('Transfer-Encoding');
+                if ($contentLength > 0 || $request->hasHeader('Content-Length')) {
+                    $request = $request->withHeader('Content-Length', (string) $contentLength);
+                }
+            }
+            catch (Throwable $error) {
+                throw new RequestException($original, $error->getMessage(), $error);
             }
 
-            $this->writeRequest($stream, $request);
-
-            $response = $this->readReponse($stream);
-            $stream->close();
-            return $response;
+            $connection = $this->connect($request->getUri());
+            $stream = $this->streamSocketFactory->createStreamSocket($connection);
+            try {
+                $this->writeRequest($stream, $request);
+            }
+            catch (SocketException $error) {
+                throw $error;
+            }
+            catch (Throwable $error) {
+                throw new RequestException($original, $error->getMessage(), $error);
+            }
+            return $this->readReponse($stream, $request->getMethod());
         }
-        catch (Throwable $th) {
-            $stream?->close();
-            throw $th;
+        catch (ClientExceptionInterface $error) {
+            throw $error;
+        }
+        catch (SocketException $error) {
+            throw new NetworkException($original, $error->getMessage(), $error);
+        }
+        catch (Throwable $error) {
+            throw new ClientException($original, $error->getMessage(), $error);
+        }
+        finally {
+            if ($stream !== null) {
+                try {
+                    $stream->close();
+                }
+                catch (Throwable $error) {
+                    // Cleanup must not replace the original request failure.
+                }
+            }
+            if (is_resource($connection)) {
+                fclose($connection);
+            }
         }
     }
 
     private function connect(UriInterface $uri)
     {
-        // resolve hostname before establishing TCP/IP connection (resolving DNS is still blocking here)
-        $ip = gethostbyname($uri->getHost());
-        if (ip2long($ip) === false) {
-            throw new Exception('Unable to resolve hostname');
+        // DNS resolution remains blocking; literal IPv4/IPv6 addresses need no lookup.
+        $host = trim($uri->getHost(), '[]');
+        $ip = filter_var($host, FILTER_VALIDATE_IP) ? $host : gethostbyname($host);
+        if (!filter_var($ip, FILTER_VALIDATE_IP)) {
+            throw new SocketException('Unable to resolve hostname');
         }
-
-        $context = null;
         $scheme = strtolower($uri->getScheme());
-        if ($scheme == 'https') {
+        $context = null;
+        if ($scheme === 'https') {
             $context = stream_context_create([
                 'ssl' => [
                     'verify_peer' => true,
                     'verify_peer_name' => true,
                     'SNI_enabled' => true,
-                    'peer_name' => $uri->getHost()
-                ]
+                    'peer_name' => $host,
+                ],
             ]);
         }
-        $address = ($scheme == 'http' ? 'tcp' : 'ssl') . '://' . $ip;
-        $address = $address . ':' . ($uri->getPort() ? $uri->getPort() : ($scheme == 'http' ? '80' : '443'));
-        // establish TCP/IP connection (non-blocking)
+        $address = ($scheme === 'http' ? 'tcp' : 'ssl') . '://' . (str_contains($ip, ':') ? '[' . $ip . ']' : $ip);
+        $address .= ':' . ($uri->getPort() ?? ($scheme === 'http' ? 80 : 443));
         $errno = 0;
         $errstr = '';
         $connection = @stream_socket_client(
@@ -82,7 +115,7 @@ class HttpClient implements ClientInterface
             $context
         );
         if (!$connection) {
-            throw new Exception('Unable to connect', $errno);
+            throw new SocketException('Unable to connect: ' . $errstr, $errno);
         }
         stream_set_blocking($connection, false);
         return $connection;
@@ -90,95 +123,78 @@ class HttpClient implements ClientInterface
 
     private function writeRequest(StreamSocket $writer, RequestInterface $request)
     {
-        $crlf = "\r\n";
-
         $uri = $request->getUri();
         $url = $uri->getPath();
-        if (empty($url) || $url[0] != '/') {
-            $url = $url . '/';
+        if ($url === '' || $url[0] !== '/') {
+            $url = '/' . $url;
         }
-        if ($uri->getQuery()) {
-            $url = $url . '?' . $uri->getQuery();
+        if ($uri->getQuery() !== '') {
+            $url .= '?' . $uri->getQuery();
         }
-        $startLine = sprintf("%s %s HTTP/%s", 
-                strtoupper($request->getMethod()),
-                $url,
-                $request->getProtocolVersion()
-            ) . $crlf;
-
-        $writer->write($startLine);
-
-        $request = $request->withHeader('Host', $uri->getHost());
+        $writer->write(sprintf("%s %s HTTP/%s\r\n", $request->getMethod(), $url, $request->getProtocolVersion()));
+        $host = $uri->getHost();
+        if ($uri->getPort() !== null) {
+            $host .= ':' . $uri->getPort();
+        }
+        $request = $request->withHeader('Host', $host);
         foreach ($request->getHeaders() as $name => $values) {
-            $line = $name . ': ' . implode(", ", $values) . $crlf;
-            $writer->write($line);
+            foreach ($values as $value) {
+                $writer->write($name . ': ' . $value . "\r\n");
+            }
         }
-        $writer->write($crlf);
+        $writer->write("\r\n");
         $writer->copyFrom($request->getBody());
     }
 
-    private function readReponse(StreamSocket $reader): ResponseInterface
+    private function readReponse(StreamSocket $reader, string $method = 'GET'): ResponseInterface
     {
-        $response = $this->responseFactory->createResponse();
-        $response = $this->addResponseStartLine($reader, $response);
-        $response = $this->addHeaders($reader, $response);
+        for ($interim = 0; ; $interim++) {
+            $response = $this->responseFactory->createResponse();
+            $response = $this->addResponseStartLine($reader, $response);
+            $response = HttpParser::readHeaders($reader, $response);
+            $status = $response->getStatusCode();
+            if ($status >= 200) {
+                break;
+            }
+            if ($status === 101 || $interim >= 15) {
+                throw new UnexpectedValueException('Unsupported or excessive informational responses');
+            }
+        }
+        if (strtoupper($method) === 'HEAD' || in_array($status, [204, 205, 304], true)) {
+            return $response;
+        }
         return $this->addBody($reader, $response);
     }
 
-    private function addResponseStartLine(StreamSocket $reader, $response): ResponseInterface
+    private function addResponseStartLine(StreamSocket $reader, ResponseInterface $response): ResponseInterface
     {
-        $line = $reader->readLine();
-        if (empty($line)) {
-            throw new Exception('Empty start line', 400);
+        $line = $reader->readLine(8002);
+        if ($line === '') {
+            throw new SocketException('Connection closed before response');
         }
-        $line = trim($line);
-        if (strlen($line) > 8000) {
-            throw new Exception('Line to long', 414);
+        if (!preg_match('/^HTTP\/(1(?:\.[01])?) ([1-5][0-9]{2})(?: ([^\r\n]*))?\r\n$/D', $line, $parts)) {
+            throw new UnexpectedValueException('Malformed response start line');
         }
-        $parts = explode(' ', $line, 3);
-        if (empty($parts) || count($parts) < 2) {
-            throw new Exception('Malformed start line', 400);
-        }
-        list($protocol, $statusCode) = $parts;
-        $parts = explode('/', $protocol);
-        if (count($parts) != 2) {
-            throw new Exception('Malformed start line', 400);
-        }
-        if ($parts[0] != 'HTTP') {
-            throw new Exception('Wrong protocol', 400);
-        }
-        return $response->withProtocolVersion($parts[1])->withStatus($statusCode);
-    }
-
-    private function addHeaders(StreamSocket $reader, ResponseInterface $message): ResponseInterface
-    {
-        $line = trim($reader->readLine());
-        while ($line) {
-            $parts = explode(':', $line, 2);
-            $name = trim($parts[0]);
-            $value = trim($parts[1]);
-            $message = $message->withAddedHeader($name, $value);
-            $line = trim($reader->readLine());
-        }
-        return $message;
+        return $response->withProtocolVersion($parts[1])->withStatus((int) $parts[2], $parts[3] ?? '');
     }
 
     private function addBody(StreamSocket $reader, ResponseInterface $message): ResponseInterface
     {
         $body = $message->getBody();
-        $length = $message->getHeader('content-length');
-        if (empty($length)) {
-            $encoding = $message->getHeader('transfer-encoding');
-            if (!empty($encoding) and strpos($encoding[0], 'chunked') !== false) {
-                $reader->copyChunkedTo($body);
+        $chunked = HttpParser::isChunked($message);
+        $length = HttpParser::contentLength($message);
+        if ($chunked) {
+            $reader->copyChunkedTo($body);
+            $message = $message->withoutHeader('Transfer-Encoding')->withoutHeader('Trailer');
+            if ($body->getSize() !== null) {
+                $message = $message->withHeader('Content-Length', (string) $body->getSize());
             }
         }
-        else {
-            $length = $length[0];
-            if ($length <= 0) {
-                return $message;
-            }
+        elseif ($length !== null) {
             $reader->copyTo($body, $length);
+        }
+        else {
+            $reader->copyUntilEof($body);
         }
         $body->rewind();
         return $message;

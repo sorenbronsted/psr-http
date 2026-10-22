@@ -20,9 +20,9 @@ class HttpClientTest extends TestCase
         $streamSocketMock->method('write');
         $streamSocketMock->method('copyFrom');
         $streamSocketMock->method('readLine')->willReturn(
-            'HTTP/1 200',
-            'content-length:0',
-            ''
+            "HTTP/1.1 200 OK\r\n",
+            "content-length:0\r\n",
+            "\r\n"
         );
         $streamSocketMock->method('close');
 
