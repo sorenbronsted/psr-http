@@ -116,6 +116,33 @@ PHP locally, `composer test` and `composer run coverage` work as well.
 The suite includes byte-preservation, HTTP framing, input-limit, error-isolation,
 and local TCP integration tests. It does not require external HTTP services.
 
+## Stress test
+
+`run.dockerfile` builds an image that serves `example/server.php` on port 8000, and
+`siege.dockerfile` builds a [Siege](https://www.joedog.org/siege-home/) client image.
+`make stress` builds both, starts the server on a private Docker network, waits until
+it accepts connections, runs Siege against it, and then removes the container and
+network:
+
+```sh
+make stress                                # 250 concurrent clients for 60 s
+make stress CONCURRENCY=50 DURATION=10S    # quick smoke test
+make stress PHP_VERSION=8.1                # another PHP runtime
+```
+
+`SIEGE_ARGS` is passed through to Siege, for example `make stress SIEGE_ARGS=-k`.
+Siege runs in benchmark mode (`-b`), and the target fails if Siege reports failed
+transactions or the server does not start listening in time.
+
+The images can also be used on their own:
+
+```sh
+docker build -f run.dockerfile   -t psr-http-run   .
+docker build -f siege.dockerfile -t psr-http-siege .
+docker run --rm -p 8000:8000 psr-http-run
+docker run --rm --network host psr-http-siege -b -c 10 -t 10S http://127.0.0.1:8000/
+```
+
 ## Bugs and improvements
 Report bugs in GitHub issues or feel free to make a pull request :-)
 
