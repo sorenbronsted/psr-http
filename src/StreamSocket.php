@@ -195,13 +195,10 @@ class StreamSocket
             $done = true;
             $suspend->done();
         };
-        if ($read) {
-            $this->loop->onReadableOnce($this->stream, $ready);
-        }
-        else {
-            $this->loop->onWriteableReady($this->stream, $ready);
-        }
-        // Fiberloop removes EOF read watchers without invoking their callbacks.
+        $watcher = $read
+            ? $this->loop->onReadable($this->stream, $ready)
+            : $this->loop->onWriteable($this->stream, $ready);
+        // Fiberloop prunes read watchers at EOF without invoking their callbacks.
         // A bounded check also wakes the reader for EOF/closure, without busy-waiting
         // or depending on Fiberloop's internal suspension implementation.
         $this->loop->repeat(0.01, function() use ($ready, $read, &$done) {
@@ -217,11 +214,17 @@ class StreamSocket
         try {
             $suspend->wait();
         }
+        catch (CancelledException $error) {
+            throw $error;
+        }
         catch (Throwable $error) {
             throw new SocketException('Timed out waiting for socket', 0, $error);
         }
         finally {
             $done = true;
+            // Fiberloop allows only one read and one write watcher per resource,
+            // so the watcher must be released before the next wait.
+            $watcher->cancel();
         }
     }
 }

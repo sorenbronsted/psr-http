@@ -153,4 +153,71 @@ class StreamSocketTest extends SocketTestCase
         $this->assertSame(strlen($payload), strlen($received));
         $this->assertSame(hash('sha256', $payload), hash('sha256', $received));
     }
+
+    public function testRepeatedWaitsReleaseFiberloopWatchers()
+    {
+        [$reader, $writer] = $this->pair();
+        $socket = new StreamSocket($reader);
+        $received = '';
+        $loop = FiberLoop::instance();
+        $loop->defer(function() use ($socket, &$received) {
+            $received = $socket->read(3);
+        });
+        // Each byte arrives in a later loop tick, so every read blocks and has
+        // to register a fresh watcher on the same resource.
+        $loop->delay(0.01, fn() => fwrite($writer, 'a'));
+        $loop->delay(0.03, fn() => fwrite($writer, 'b'));
+        $loop->delay(0.05, fn() => fwrite($writer, 'c'));
+        $loop->run();
+
+        $this->assertSame('abc', $received);
+    }
+
+    public function testPeerCloseWhileWaitingFailsBeforeTheSuspendTimeout()
+    {
+        [$reader, $writer] = $this->pair();
+        $socket = new StreamSocket($reader);
+        $error = null;
+        $start = microtime(true);
+        $loop = FiberLoop::instance();
+        $loop->defer(function() use ($socket, &$error) {
+            try {
+                $socket->read(5);
+            }
+            catch (\Throwable $e) {
+                $error = $e;
+            }
+        });
+        $loop->delay(0.02, fn() => fclose($writer));
+        $loop->run();
+        $elapsed = microtime(true) - $start;
+
+        $this->assertInstanceOf(SocketException::class, $error);
+        $this->assertLessThan(1.0, $elapsed, 'EOF should not wait for the Suspend timeout');
+    }
+
+    /**
+     * Fiberloop 3 silently cancels work scheduled after stop() until run() is
+     * called again, so keep this test out of the shared singleton process.
+     */
+    #[\PHPUnit\Framework\Attributes\RunInSeparateProcess]
+    public function testStoppingTheLoopCancelsAPendingWait()
+    {
+        [$reader, $writer] = $this->pair();
+        $socket = new StreamSocket($reader);
+        $error = null;
+        $loop = FiberLoop::instance();
+        $loop->defer(function() use ($socket, &$error) {
+            try {
+                $socket->read(1);
+            }
+            catch (\Throwable $e) {
+                $error = $e;
+            }
+        });
+        $loop->delay(0.02, fn() => $loop->stop());
+        $loop->run();
+
+        $this->assertInstanceOf(CancelledException::class, $error);
+    }
 }

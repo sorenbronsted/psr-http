@@ -83,11 +83,12 @@ class HttpServer
             });
             return true;
         };
-        if (PHP_VERSION_ID >= 80500) {
-            // PHP 8.5 reports EOF on listening TCP streams with queued clients.
-            // Fiberloop 2.x drops such read watchers. Poll non-blocking accept
-            // with a timer on these runtimes, rather than spinning or using its
-            // internal scheduling API. Bound each batch to keep other work fair.
+        if (PHP_VERSION_ID >= 80300) {
+            // PHP 8.3 and newer report EOF on listening TCP streams with queued
+            // clients. Fiberloop drops such read watchers. Poll non-blocking
+            // accept with a timer on these runtimes, rather than spinning or
+            // using its internal scheduling API. Bound each batch to keep other
+            // work fair.
             $this->loop->repeat(0.001, function() use ($server, $accept) {
                 if (!is_resource($server)) {
                     return 0;

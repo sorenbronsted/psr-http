@@ -4,27 +4,27 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "c8fba337b716f6a23b1adf40804aed12",
+    "content-hash": "882458f32a0ebbfa1b1658225d6a5421",
     "packages": [
         {
             "name": "bronsted/fiberloop",
-            "version": "v2.1",
+            "version": "v3.0",
             "source": {
                 "type": "git",
                 "url": "https://github.com/sorenbronsted/fiberloop.git",
-                "reference": "81f7bd16d8d8eb0f6a5c9c126bcd9b4465914591"
+                "reference": "808587b7ab4941848beaaa925f275fc079cc5e12"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/sorenbronsted/fiberloop/zipball/81f7bd16d8d8eb0f6a5c9c126bcd9b4465914591",
-                "reference": "81f7bd16d8d8eb0f6a5c9c126bcd9b4465914591",
+                "url": "https://api.github.com/repos/sorenbronsted/fiberloop/zipball/808587b7ab4941848beaaa925f275fc079cc5e12",
+                "reference": "808587b7ab4941848beaaa925f275fc079cc5e12",
                 "shasum": ""
             },
             "require": {
                 "php": "^8.1"
             },
             "require-dev": {
-                "phpunit/phpunit": "^9.5"
+                "phpunit/phpunit": "^12.5"
             },
             "type": "library",
             "autoload": {
@@ -49,9 +49,9 @@
             "description": "Fiberloop",
             "support": {
                 "issues": "https://github.com/sorenbronsted/fiberloop/issues",
-                "source": "https://github.com/sorenbronsted/fiberloop/tree/v2.1"
+                "source": "https://github.com/sorenbronsted/fiberloop/tree/v3.0"
             },
-            "time": "2026-10-22T09:05:29+00:00"
+            "time": "2026-10-25T11:51:50+00:00"
         },
         {
             "name": "kekos/multipart-form-data-parser",

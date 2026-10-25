@@ -4,6 +4,10 @@ This is a http server and client package with [PSR](https://www.php-fig.org/) in
 with frameworks which uses PSR interface. It is build with [FiberLoop](https://github.com/sorenbronsted/fiberloop) 
 which is coroutines build on php fibers.
 
+Version 3 requires Fiberloop 3.x, whose event loop is built around read and write
+watchers. `HttpServer::getFiberLoop()` returns that loop, so timers and deferred
+work can be scheduled on the same loop.
+
 ## Install
 You can install this package via [Composer](http://getcomposer.org/):
 
@@ -99,10 +103,10 @@ The original request and underlying exception are available through
 size; unknown-size bodies are rejected with a request exception rather than
 sent without framing. Hostname resolution remains blocking.
 
-On PHP 8.5 and newer, the server uses a bounded 1 ms non-blocking accept poll to
-work around Fiberloop 2.x treating listening TCP sockets as EOF. Earlier runtimes
-use readiness notifications. EOF checks for pending socket reads are timer-based,
-so a peer closing its send direction also wakes the reader without busy-waiting.
+On PHP 8.3 and newer, the server uses a bounded 1 ms non-blocking accept poll to
+work around Fiberloop treating listening TCP sockets as EOF. Earlier runtimes use
+readiness notifications. EOF checks for pending socket reads are timer-based, so
+a peer closing its send direction also wakes the reader without busy-waiting.
 
 ## Tests
 
