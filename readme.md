@@ -89,6 +89,12 @@ arguments `maxHeaderBytes` and `maxBodyBytes` override the total-header and body
 limits. Ambiguous framing, such as both `Content-Length` and `Transfer-Encoding`,
 is rejected rather than guessed.
 
+The listening socket uses a 511-deep backlog by default, adjustable through the
+last constructor argument (`$backlog`); the kernel caps it at `net.core.somaxconn`.
+A larger backlog matters when many clients connect at the same moment: with a small
+queue the kernel drops SYNs, and TCP retransmits them after about a second, which
+shows up as multi-second response times in load tests.
+
 The client reads fixed-length, chunked, and connection-close-delimited responses.
 Informational responses are skipped until the final response; HEAD, 204, 205,
 and 304 responses do not wait for a body. Truncated bodies are errors, and chunk

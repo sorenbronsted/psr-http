@@ -29,6 +29,7 @@ class HttpServer
     private FiberLoop $loop;
     private int $maxHeaderBytes;
     private int $maxBodyBytes;
+    private int $backlog;
     private LoggerInterface $log;
 
     public function __construct(
@@ -41,10 +42,11 @@ class HttpServer
         StreamFactoryInterface $streamFactory,
         ?LoggerInterface $log = null,
         int $maxHeaderBytes = 65536,
-        int $maxBodyBytes = 8388608
+        int $maxBodyBytes = 8388608,
+        int $backlog = 511
     ) {
-        if ($maxHeaderBytes < 2 || $maxBodyBytes < 0) {
-            throw new \InvalidArgumentException('Invalid HTTP size limits');
+        if ($maxHeaderBytes < 2 || $maxBodyBytes < 0 || $backlog < 1) {
+            throw new \InvalidArgumentException('Invalid HTTP limits');
         }
         $this->interface = $interface;
         $this->port = $port;
@@ -56,6 +58,7 @@ class HttpServer
         $this->log = $log ?? new NullLogger();
         $this->maxHeaderBytes = $maxHeaderBytes;
         $this->maxBodyBytes = $maxBodyBytes;
+        $this->backlog = $backlog;
         $this->loop = FiberLoop::instance();
     }
 
@@ -66,9 +69,22 @@ class HttpServer
 
     public function run(Closure $callback)
     {
-        $server = @stream_socket_server('tcp://' . $this->interface . ':' . $this->port);
+        // The default backlog is small enough that a burst of clients can
+        // overflow the listen queue, and Linux then drops SYNs. TCP retries
+        // those after about a second, which shows up as multi-second response
+        // times in a stress test. The kernel caps this at net.core.somaxconn.
+        $context = stream_context_create(['socket' => ['backlog' => $this->backlog]]);
+        $errorCode = 0;
+        $errorMessage = '';
+        $server = @stream_socket_server(
+            'tcp://' . $this->interface . ':' . $this->port,
+            $errorCode,
+            $errorMessage,
+            STREAM_SERVER_BIND | STREAM_SERVER_LISTEN,
+            $context
+        );
         if (!$server) {
-            throw new Exception('Create socket failed');
+            throw new Exception('Create socket failed: ' . $errorMessage, $errorCode);
         }
         stream_set_blocking($server, false);
         $accept = function() use ($server, $callback): bool {

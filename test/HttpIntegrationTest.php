@@ -89,4 +89,25 @@ class HttpIntegrationTest extends SocketTestCase
         $this->assertSame($payload, $response->getBody()->getContents());
         $this->request("GET /stop HTTP/1.1\r\n\r\n");
     }
+
+    public function testServerAcceptsABurstOfConnectionsWithoutSynRetransmits()
+    {
+        // The probe runs in its own process because Brain Monkey patches
+        // stream_socket_client() in this one. 256 connections is well above the
+        // previous 32-deep listen queue, but below the 511 the server now uses.
+        $process = proc_open(
+            [PHP_BINARY, __DIR__ . '/fixtures/burst.php', (string) $this->port, '256', '0.75'],
+            [1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
+            $pipes
+        );
+        $this->assertIsResource($process);
+
+        $output = stream_get_contents($pipes[1]);
+        $error = stream_get_contents($pipes[2]);
+        fclose($pipes[1]);
+        fclose($pipes[2]);
+        $status = proc_close($process);
+
+        $this->assertSame(0, $status, trim($output . "\n" . $error));
+    }
 }
