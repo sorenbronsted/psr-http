@@ -106,7 +106,9 @@ so a peer closing its send direction also wakes the reader without busy-waiting.
 
 ## Tests
 
-Run `composer test`, or `composer run coverage` with Xdebug coverage enabled.
+Run `make test` to build the Docker image and run `composer install` and
+`composer test` inside it, or `make coverage` for Xdebug coverage. If you have
+PHP locally, `composer test` and `composer run coverage` work as well.
 The suite includes byte-preservation, HTTP framing, input-limit, error-isolation,
 and local TCP integration tests. It does not require external HTTP services.
 
