@@ -196,11 +196,6 @@ class StreamSocketTest extends SocketTestCase
         $this->assertLessThan(1.0, $elapsed, 'EOF should not wait for the Suspend timeout');
     }
 
-    /**
-     * Fiberloop 3 silently cancels work scheduled after stop() until run() is
-     * called again, so keep this test out of the shared singleton process.
-     */
-    #[\PHPUnit\Framework\Attributes\RunInSeparateProcess]
     public function testStoppingTheLoopCancelsAPendingWait()
     {
         [$reader, $writer] = $this->pair();

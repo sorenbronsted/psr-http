@@ -190,27 +190,12 @@ class StreamSocket
     private function wait(bool $read): void
     {
         $suspend = new Suspend();
-        $done = false;
-        $ready = function() use ($suspend, &$done) {
-            $done = true;
-            $suspend->done();
-        };
+        $ready = fn() => $suspend->done();
+        // Fiberloop calls a read watcher one final time when the stream reaches
+        // EOF, so no polling is needed to notice a peer closing its side.
         $watcher = $read
             ? $this->loop->onReadable($this->stream, $ready)
             : $this->loop->onWriteable($this->stream, $ready);
-        // Fiberloop prunes read watchers at EOF without invoking their callbacks.
-        // A bounded check also wakes the reader for EOF/closure, without busy-waiting
-        // or depending on Fiberloop's internal suspension implementation.
-        $this->loop->repeat(0.01, function() use ($ready, $read, &$done) {
-            if ($done) {
-                return 0;
-            }
-            if (!is_resource($this->stream) || ($read && feof($this->stream))) {
-                $ready();
-                return 0;
-            }
-            return null;
-        });
         try {
             $suspend->wait();
         }
@@ -221,7 +206,6 @@ class StreamSocket
             throw new SocketException('Timed out waiting for socket', 0, $error);
         }
         finally {
-            $done = true;
             // Fiberloop allows only one read and one write watcher per resource,
             // so the watcher must be released before the next wait.
             $watcher->cancel();
