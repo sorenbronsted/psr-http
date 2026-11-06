@@ -17,7 +17,7 @@ class HttpServerLimitsIntegrationTest extends SocketTestCase
         }
         $this->process = proc_open([
             PHP_BINARY, __DIR__ . '/fixtures/server.php',
-            json_encode(['headerTimeout' => 0.3, 'requestTimeout' => 0.6, 'maxConnections' => 2]),
+            json_encode(['headerTimeout' => 0.3, 'requestTimeout' => 0.6, 'maxConnections' => 2, 'maxParsedBodyBytes' => 16]),
         ], [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $this->pipes);
         $this->assertIsResource($this->process);
         fclose($this->pipes[0]);
@@ -120,5 +120,20 @@ class HttpServerLimitsIntegrationTest extends SocketTestCase
         $this->assertStringStartsWith('HTTP/1.1 408 ', $this->response($connection));
         $this->assertLessThan(1.0, microtime(true) - $start);
         $this->assertStringStartsWith('HTTP/1.1 200 ', $this->request('/ok'));
+    }
+
+    public function testParsingLimitRejectsLargeJsonAndReleasesTheConnectionSlot()
+    {
+        $pending = $this->connect("GET /ok HTTP/1.1\r\nHost: localhost\r\n");
+        // The original memory-exhaustion payload's declared size is below the
+        // general 8 MiB limit. Reject it before allocating or parsing its body.
+        for ($i = 0; $i < 2; $i++) {
+            $connection = $this->connect("POST /echo HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n"
+                . "Content-Length: 3200001\r\n\r\n");
+            $this->assertStringStartsWith('HTTP/1.1 413 ', $this->response($connection));
+        }
+        $this->assertStringStartsWith('HTTP/1.1 200 ', $this->request('/ok'));
+        fwrite($pending, "\r\n");
+        $this->assertStringStartsWith('HTTP/1.1 200 ', $this->response($pending));
     }
 }

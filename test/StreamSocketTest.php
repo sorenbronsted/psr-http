@@ -242,4 +242,93 @@ class StreamSocketTest extends SocketTestCase
         $this->expectException(\InvalidArgumentException::class);
         $this->input('')->setReadDeadline(INF);
     }
+
+    public function testCloseDelimitedBodyCannotWritePastTheLimit()
+    {
+        $destination = $this->factory->createStream();
+        try {
+            $this->input('abcde')->copyUntilEof($destination, 4);
+            $this->fail('Expected body limit failure');
+        }
+        catch (\LengthException $error) {
+            $this->assertLessThanOrEqual(4, $destination->getSize());
+        }
+    }
+
+    /** @dataProvider boundedCopyMethods */
+    public function testNegativeBodyLimitsAreRejected(string $method)
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->input('')->$method($this->factory->createStream(), -1);
+    }
+
+    public static function boundedCopyMethods(): array
+    {
+        return [['copyUntilEof'], ['copyChunkedTo']];
+    }
+
+    public function testWriteDeadlineAppliesEvenWhenTheSocketIsWritable()
+    {
+        [$writer, $reader] = $this->pair();
+        $socket = new StreamSocket($writer);
+        $socket->setWriteDeadline(hrtime(true) / 1e9 - 1);
+        $this->expectException(SocketException::class);
+        $socket->write('x');
+    }
+
+    public function testWriteDeadlineCanBeCleared()
+    {
+        [$writer, $reader] = $this->pair();
+        $socket = new StreamSocket($writer);
+        $socket->setWriteDeadline(hrtime(true) / 1e9 - 1);
+        $socket->setWriteDeadline(null);
+        $socket->write('x');
+        $this->assertSame('x', fread($reader, 1));
+    }
+
+    public function testNonFiniteWriteDeadlineIsRejected()
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->input('')->setWriteDeadline(INF);
+    }
+
+    public function testWriteDeadlineBoundsBackpressureWaits()
+    {
+        [$writer, $reader] = $this->pair();
+        $socket = new StreamSocket($writer);
+        $started = hrtime(true) / 1e9;
+        $socket->setWriteDeadline($started + 0.08);
+        $error = null;
+        $finished = false;
+        $loop = FiberLoop::instance();
+        $loop->defer(function() use ($socket, &$error, &$finished) {
+            try {
+                $socket->write(str_repeat('x', 1048576));
+            }
+            catch (\Throwable $caught) {
+                $error = $caught;
+            }
+            finally {
+                $finished = true;
+                $socket->close();
+            }
+        });
+        $loop->repeat(0.01, function() use ($reader, &$finished) {
+            if ($finished) {
+                return 0;
+            }
+            fread($reader, 4096);
+            return null;
+        });
+        $loop->run();
+
+        $this->assertInstanceOf(SocketException::class, $error);
+        $this->assertLessThan(0.3, hrtime(true) / 1e9 - $started);
+    }
+
+    public function testExpiredConnectionDeadlineDoesNotStartTls()
+    {
+        $this->expectException(SocketException::class);
+        $this->input('')->enableTls(hrtime(true) / 1e9 - 1);
+    }
 }

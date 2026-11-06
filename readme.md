@@ -101,6 +101,8 @@ The server also accepts these optional named constructor arguments:
 | `headerTimeout` | `10.0` seconds | Absolute deadline for receiving the request line and headers. |
 | `requestTimeout` | `30.0` seconds | Absolute deadline for receiving the entire request, including headers, body and chunk trailers. |
 | `maxConnections` | `256` | Maximum accepted connections being processed, including response writes. |
+| `maxParsedBodyBytes` | `null` | Additional input-byte limit for automatic JSON and multipart parsing; `null` uses `maxBodyBytes`. |
+| `parseBody` | `true` | Automatically populate parsed JSON/form fields and uploaded files; `false` leaves the bounded raw body for the application. |
 
 Both deadlines start when the socket is accepted, not when its worker is scheduled.
 Receiving another byte does not reset them. The earlier deadline applies while
@@ -121,15 +123,100 @@ A larger backlog matters when many clients connect at the same moment: with a sm
 queue the kernel drops SYNs, and TCP retransmits them after about a second, which
 shows up as multi-second response times in load tests.
 
-These security defaults were introduced in **v3.0.4**. Existing valid requests and
-constructor argument positions remain supported; clients sending invalid HTTP/1.1
-Host headers must be corrected.
+The original request-size, Host, timeout and connection defaults were introduced in
+**v3.0.4**. Existing constructor argument positions remain supported. The new parsing
+options preserve the original server defaults unless explicitly configured. Valid
+requests within the configured limits remain supported; clients sending invalid
+HTTP/1.1 Host headers must be corrected.
+
+### Memory budgets and automatic parsing
+
+HTTP does not define a universal maximum request-body size. The body limit is a
+deployment policy, not a guarantee about the memory needed to process that body.
+In particular, `json_decode()` can turn a small JSON document containing many tiny
+objects into a much larger PHP object graph. Multipart parsing also buffers and
+allocates additional structures. A depth limit does not limit the number of elements.
+
+Configure PHP's `memory_limit`, `maxBodyBytes`, `maxParsedBodyBytes` and
+`maxConnections` together. `memory_limit` applies to the shared PHP process, not
+separately to each fiber/request. Allow headroom for headers, raw bodies, parsing,
+handlers, response buffers and outgoing HTTP calls. PHP memory-exhaustion failures
+cannot reliably be caught by `catch (Throwable)` and can terminate the whole server.
+The library never raises `memory_limit` or infers a supposedly safe body size from it.
+
+For example, a small JSON service can start with explicit limits like these, then
+measure and adjust them for its workload and process/container memory budget:
+
+```php
+$server = new HttpServer(
+    '127.0.0.1', 8000, $factory, $factory, $factory, $factory, $factory,
+    maxBodyBytes: 1048576,       // 1 MiB for raw request bodies
+    maxConnections: 4,
+    maxParsedBodyBytes: 65536,   // 64 KiB for automatic JSON/multipart parsing
+);
+```
+
+These are illustrative values, not a guarantee of safety under a 128 MiB memory
+limit. Test adversarial payloads and peak concurrency as well as normal requests.
+The parsing limit is an additional cap on input bytes, **not** the memory size of
+the parsed result. It never increases `maxBodyBytes`. Declared oversized bodies are
+rejected before reading them, and the cap is also enforced while decoding chunked
+input. Rejections return `413` without invoking the handler.
+
+Use `parseBody: false` when an application needs its own bounded/streaming parser
+or must accept larger JSON/multipart bodies. The raw PSR-7 body is still populated,
+rewound and limited by `maxBodyBytes`; `getParsedBody()` and `getUploadedFiles()`
+are not automatically populated. This does not itself make socket ingestion stream
+directly into the handler or protect an application parser from excessive allocation.
+
+### Client limits and timeouts
 
 The client reads fixed-length, chunked, and connection-close-delimited responses.
 Informational responses are skipped until the final response; HEAD, 204, 205,
 and 304 responses do not wait for a body. Truncated bodies are errors, and chunk
 payloads are preserved byte-for-byte. Protocol upgrades (`101`) and transfer
 codings other than `chunked` are not supported.
+
+The client accepts these additional named constructor arguments after its existing
+factory, logger and connect-timeout arguments:
+
+| Argument | Default | Behavior |
+| --- | --- | --- |
+| `maxResponseBodyBytes` | `8388608` (8 MiB) | Maximum decoded response-body bytes for fixed-length, chunked and connection-close framing. |
+| `requestTimeout` | `30.0` seconds | Absolute deadline covering connection establishment, TLS, request writes, response headers, body and chunk trailers. |
+| `maxResponseHeaderBytes` | `65536` (64 KiB) | Maximum bytes per response header section, including informational responses. |
+
+```php
+$client = new HttpClient(
+    $factory, new StreamSocketFactory(),
+    timeout: 3,
+    maxResponseBodyBytes: 1048576,
+    requestTimeout: 10.0,
+);
+```
+
+The original `timeout` argument now bounds completion of the asynchronous TCP
+connection **and** TLS handshake together. A value of `0` disables that separate
+connect limit, but never the overall `requestTimeout`. Receiving/sending more bytes
+does not reset the absolute deadlines; the existing five-second socket inactivity
+timeout also remains. Timeouts must be finite and positive except for the legacy
+zero connect timeout, and byte limits must be non-negative (header limits at least 2).
+
+HTTPS connects over non-blocking TCP first, then negotiates TLS cooperatively on
+the same event loop. Peer certificate, hostname verification and SNI remain enabled.
+Application request bytes are not sent until TLS succeeds, and there is no plaintext
+fallback. Schedule `sendRequest()` inside a Fiberloop fiber as in the usage example.
+
+Response-size/header-limit failures use `ClientException` with the underlying
+`LengthException`; network/connect/TLS/deadline failures use `NetworkException`.
+Every outcome closes the connection. HEAD and bodyless statuses do not reject an
+advertised representation size merely because it exceeds the body limit.
+
+The new client defaults intentionally bound previously unbounded response reads.
+Increase the size/time limits explicitly for large downloads or slow endpoints, and
+include concurrent outgoing responses in the process memory budget. Deadlines do
+not preempt blocking DNS resolution or synchronous application/PSR-stream code;
+expired DNS lookups are rejected when control returns.
 
 Client failures implement PSR-18's `ClientExceptionInterface`. Network failures
 use `bronsted\NetworkException`, invalid or unreadable outgoing requests use
@@ -146,11 +233,17 @@ notification when a peer closes its send direction, so no polling is needed.
 
 ## Tests
 
+GitHub Actions runs the full test suite on PHP 8.1 through 8.5 for pushes
+(including tags), pull requests and manual runs. The workflow is defined in
+`.github/workflows/tests.yml`.
+
 Run `make test` to build the Docker image and run `composer install` and
 `composer test` inside it, or `make coverage` for Xdebug coverage. If you have
 PHP locally, `composer test` and `composer run coverage` work as well.
-The suite includes byte-preservation, HTTP framing, input-limit, error-isolation,
-and local TCP integration tests. It does not require external HTTP services.
+The suite includes byte-preservation, HTTP framing, parsing/response limits,
+error-isolation, backpressure/deadline tests, and local TCP/TLS integration tests.
+TLS tests generate disposable certificates and check trusted, untrusted, expired
+and wrong-host certificates without requiring external HTTP services.
 
 ## Stress test
 

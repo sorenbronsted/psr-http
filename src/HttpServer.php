@@ -33,6 +33,8 @@ class HttpServer
     private float $headerTimeout;
     private float $requestTimeout;
     private int $maxConnections;
+    private ?int $maxParsedBodyBytes;
+    private bool $parseBody;
     private LoggerInterface $log;
 
     public function __construct(
@@ -49,9 +51,12 @@ class HttpServer
         int $backlog = 511,
         float $headerTimeout = 10.0,
         float $requestTimeout = 30.0,
-        int $maxConnections = 256
+        int $maxConnections = 256,
+        ?int $maxParsedBodyBytes = null,
+        bool $parseBody = true
     ) {
         if ($maxHeaderBytes < 2 || $maxBodyBytes < 0 || $backlog < 1 || $maxConnections < 1
+            || ($maxParsedBodyBytes !== null && $maxParsedBodyBytes < 0)
             || !is_finite($headerTimeout) || $headerTimeout <= 0
             || !is_finite($requestTimeout) || $requestTimeout <= 0) {
             throw new \InvalidArgumentException('Invalid HTTP limits');
@@ -70,6 +75,8 @@ class HttpServer
         $this->headerTimeout = $headerTimeout;
         $this->requestTimeout = $requestTimeout;
         $this->maxConnections = $maxConnections;
+        $this->maxParsedBodyBytes = $maxParsedBodyBytes;
+        $this->parseBody = $parseBody;
         $this->loop = FiberLoop::instance();
     }
 
@@ -309,12 +316,20 @@ class HttpServer
     {
         $chunked = HttpParser::isChunked($request);
         $length = HttpParser::contentLength($request);
+        $type = strtolower(trim(explode(';', $request->getHeaderLine('Content-Type'), 2)[0]));
+        $parse = $this->parseBody && ($type === 'multipart/form-data'
+            || $type === 'application/json' || str_ends_with($type, '+json'));
+        // This is an input-byte limit for the buffered parsers, not a promise
+        // about the size of the resulting PHP objects or uploaded-file streams.
+        $limit = $parse && $this->maxParsedBodyBytes !== null
+            ? min($this->maxBodyBytes, $this->maxParsedBodyBytes)
+            : $this->maxBodyBytes;
         $body = $request->getBody();
         if ($chunked) {
-            $reader->copyChunkedTo($body, $this->maxBodyBytes);
+            $reader->copyChunkedTo($body, $limit);
         }
         elseif ($length !== null) {
-            if ($length > $this->maxBodyBytes) {
+            if ($length > $limit) {
                 throw new LengthException('Body too large', 413);
             }
             $reader->copyTo($body, $length);
@@ -323,12 +338,11 @@ class HttpServer
             return $request;
         }
         $body->rewind();
-        $type = strtolower(trim(explode(';', $request->getHeaderLine('Content-Type'), 2)[0]));
-        if ($type === 'multipart/form-data') {
+        if ($parse && $type === 'multipart/form-data') {
             $parser = new Parser($body->getContents(), $request->getHeaderLine('Content-Type'), $this->uploadFactory, $this->streamFactory);
             $request = $parser->decorateRequest($request);
         }
-        elseif ($type === 'application/json' || str_ends_with($type, '+json')) {
+        elseif ($parse) {
             $data = json_decode($body->getContents(), false, 512, JSON_THROW_ON_ERROR);
             $request = $request->withParsedBody(is_array($data) || is_object($data) ? $data : null);
         }

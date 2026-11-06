@@ -13,6 +13,7 @@ class StreamSocket
     private mixed $stream;
     private FiberLoop $loop;
     private ?float $readDeadline = null;
+    private ?float $writeDeadline = null;
 
     public function __construct(mixed $stream)
     {
@@ -34,6 +35,65 @@ class StreamSocket
             throw new \InvalidArgumentException('Read deadline must be finite');
         }
         $this->readDeadline = $deadline;
+    }
+
+    /** Set an absolute monotonic deadline for outgoing socket data. */
+    public function setWriteDeadline(?float $deadline): void
+    {
+        if ($deadline !== null && !is_finite($deadline)) {
+            throw new \InvalidArgumentException('Write deadline must be finite');
+        }
+        $this->writeDeadline = $deadline;
+    }
+
+    /** Await completion of an asynchronous TCP connect before using the socket. */
+    public function awaitConnection(float $deadline): void
+    {
+        $this->assertConnectionDeadline($deadline);
+        $this->wait(false, $deadline);
+        $this->assertConnectionDeadline($deadline);
+        if (@stream_socket_get_name($this->stream, true) === false) {
+            throw new SocketException('Unable to complete TCP connection');
+        }
+    }
+
+    /** Enable verified TLS on a connected non-blocking TCP socket. */
+    public function enableTls(float $deadline): void
+    {
+        while (true) {
+            $this->assertOpen();
+            $this->assertConnectionDeadline($deadline);
+            $result = @stream_socket_enable_crypto($this->stream, true, STREAM_CRYPTO_METHOD_TLS_CLIENT);
+            if ($result === true) {
+                return;
+            }
+            if ($result === false) {
+                throw new SocketException('TLS handshake failed');
+            }
+
+            $remaining = $deadline - hrtime(true) / 1e9;
+            $this->assertConnectionDeadline($deadline);
+            $suspend = new Suspend($remaining);
+            $ready = fn() => $suspend->done();
+            $watcher = $this->loop->onReadable($this->stream, $ready);
+            // PHP does not expose OpenSSL's WANT_READ/WANT_WRITE state. Read
+            // readiness wakes the usual case; a bounded retry also covers a
+            // handshake waiting to write, without watching an always-writable
+            // socket and spinning the loop. No application data is sent yet.
+            try {
+                $this->loop->delay(min(0.01, $remaining), $ready);
+                $suspend->wait();
+            }
+            catch (CancelledException $error) {
+                throw $error;
+            }
+            catch (Throwable $error) {
+                throw new SocketException('Timed out during TLS handshake', 0, $error);
+            }
+            finally {
+                $watcher->cancel();
+            }
+        }
     }
 
     public function readLine(int $maxLength = 8192): string
@@ -88,15 +148,33 @@ class StreamSocket
         }
     }
 
-    public function copyUntilEof(StreamInterface $destination)
+    public function copyUntilEof(StreamInterface $destination, int $maxLength = PHP_INT_MAX)
     {
-        while (($bytes = $this->readAvailable(8192)) !== '') {
+        if ($maxLength < 0) {
+            throw new \InvalidArgumentException('Body limit must be non-negative');
+        }
+        $total = 0;
+        while (true) {
+            $remaining = $maxLength - $total;
+            // Read one extra byte at the boundary to distinguish an exact-size
+            // body from an oversized body, without buffering the excess.
+            $bytes = $this->readAvailable($remaining >= 8192 ? 8192 : $remaining + 1);
+            if ($bytes === '') {
+                return;
+            }
+            if (strlen($bytes) > $remaining) {
+                throw new LengthException('Body too large', 413);
+            }
             $this->writeDestination($destination, $bytes);
+            $total += strlen($bytes);
         }
     }
 
     public function copyChunkedTo(StreamInterface $destination, int $maxLength = PHP_INT_MAX)
     {
+        if ($maxLength < 0) {
+            throw new \InvalidArgumentException('Body limit must be non-negative');
+        }
         $total = 0;
         while (true) {
             $line = $this->readLine();
@@ -138,6 +216,7 @@ class StreamSocket
         $length = strlen($string);
         while ($pos < $length) {
             $this->assertOpen();
+            $this->assertWriteDeadline();
             $written = @fwrite($this->stream, substr($string, $pos, min(8192, $length - $pos)));
             if ($written === false) {
                 throw new SocketException('fwrite failed');
@@ -205,12 +284,36 @@ class StreamSocket
         }
     }
 
-    private function wait(bool $read): void
+    private function assertWriteDeadline(): void
     {
-        $timeout = 5.0;
-        if ($read && $this->readDeadline !== null) {
+        if ($this->writeDeadline !== null && hrtime(true) / 1e9 >= $this->writeDeadline) {
+            throw new SocketException('Write deadline exceeded');
+        }
+    }
+
+    private function assertConnectionDeadline(float $deadline): void
+    {
+        if (!is_finite($deadline)) {
+            throw new \InvalidArgumentException('Connection deadline must be finite');
+        }
+        if (hrtime(true) / 1e9 >= $deadline) {
+            throw new SocketException('Connection deadline exceeded');
+        }
+    }
+
+    private function wait(bool $read, ?float $connectionDeadline = null): void
+    {
+        $this->assertOpen();
+        $timeout = $connectionDeadline === null ? 5.0 : max(0.0, $connectionDeadline - hrtime(true) / 1e9);
+        $deadline = $read ? $this->readDeadline : $this->writeDeadline;
+        if ($read) {
             $this->assertReadDeadline();
-            $timeout = min($timeout, max(0.0, $this->readDeadline - hrtime(true) / 1e9));
+        }
+        else {
+            $this->assertWriteDeadline();
+        }
+        if ($deadline !== null) {
+            $timeout = min($timeout, max(0.0, $deadline - hrtime(true) / 1e9));
         }
         $suspend = new Suspend($timeout);
         $ready = fn() => $suspend->done();

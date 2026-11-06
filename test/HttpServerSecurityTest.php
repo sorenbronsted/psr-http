@@ -94,7 +94,97 @@ class HttpServerSecurityTest extends SocketTestCase
             [['requestTimeout' => 0.0]], [['requestTimeout' => -1.0]],
             [['requestTimeout' => INF]], [['requestTimeout' => NAN]],
             [['maxConnections' => 0]], [['maxConnections' => -1]],
+            [['maxParsedBodyBytes' => -1]],
         ];
+    }
+
+    /** @dataProvider bufferedContentTypes */
+    public function testParsedBodyLimitRejectsDeclaredSizeBeforeReadingTheBody(string $type)
+    {
+        [$server, $client] = $this->pair();
+        fwrite($client, "POST / HTTP/1.1\r\nHost: localhost\r\nContent-Type: {$type}\r\nContent-Length: 9\r\n\r\n");
+        $called = false;
+        $this->invoke($this->configuredServer(['maxParsedBodyBytes' => 8]), 'work', new StreamSocket($server),
+            function() use (&$called) { $called = true; });
+
+        $this->assertStringStartsWith('HTTP/1.1 413 ', stream_get_contents($client));
+        $this->assertFalse($called);
+    }
+
+    /** @dataProvider bufferedContentTypes */
+    public function testParsedBodyLimitAlsoAppliesToChunkedInput(string $type)
+    {
+        [$server, $client] = $this->pair();
+        fwrite($client, "POST / HTTP/1.1\r\nHost: localhost\r\nContent-Type: {$type}\r\nTransfer-Encoding: chunked\r\n\r\n"
+            . "4\r\n1234\r\n5\r\n56789\r\n0\r\n\r\n");
+        stream_socket_shutdown($client, STREAM_SHUT_WR);
+        $called = false;
+        $this->invoke($this->configuredServer(['maxParsedBodyBytes' => 8]), 'work', new StreamSocket($server),
+            function() use (&$called) { $called = true; });
+
+        $this->assertStringStartsWith('HTTP/1.1 413 ', stream_get_contents($client));
+        $this->assertFalse($called);
+    }
+
+    public static function bufferedContentTypes(): array
+    {
+        return [
+            ['application/json'], ['Application/JSON; charset=utf-8'], ['application/problem+json'],
+            ['multipart/form-data; boundary=test'],
+        ];
+    }
+
+    public function testJsonAtTheParsingLimitPreservesBothParsedAndRawBody()
+    {
+        [$server, $client] = $this->pair();
+        $json = '{"a":1}';
+        fwrite($client, "POST / HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: 7\r\n\r\n" . $json);
+        stream_socket_shutdown($client, STREAM_SHUT_WR);
+        $incoming = null;
+        $factory = $this->factory;
+        $this->invoke($this->configuredServer(['maxParsedBodyBytes' => 7]), 'work', new StreamSocket($server),
+            function($request) use (&$incoming, $factory) {
+                $incoming = $request;
+                return $factory->createResponse();
+            });
+
+        $this->assertStringStartsWith('HTTP/1.1 200 ', stream_get_contents($client));
+        $this->assertSame(1, $incoming->getParsedBody()->a);
+        $this->assertSame($json, $incoming->getBody()->getContents());
+    }
+
+    /** @dataProvider unparsedBodies */
+    public function testRawBodiesAreNotSubjectToTheParsingLimit(string $type, bool $parseBody)
+    {
+        [$server, $client] = $this->pair();
+        fwrite($client, "POST / HTTP/1.1\r\nHost: localhost\r\nContent-Type: {$type}\r\nContent-Length: 8\r\n\r\nnot-json");
+        stream_socket_shutdown($client, STREAM_SHUT_WR);
+        $incoming = null;
+        $factory = $this->factory;
+        $this->invoke($this->configuredServer(['maxBodyBytes' => 8, 'maxParsedBodyBytes' => 0, 'parseBody' => $parseBody]),
+            'work', new StreamSocket($server), function($request) use (&$incoming, $factory) {
+                $incoming = $request;
+                return $factory->createResponse();
+            });
+
+        $this->assertStringStartsWith('HTTP/1.1 200 ', stream_get_contents($client));
+        $this->assertNull($incoming->getParsedBody());
+        $this->assertSame([], $incoming->getUploadedFiles());
+        $this->assertSame('not-json', $incoming->getBody()->getContents());
+    }
+
+    public static function unparsedBodies(): array
+    {
+        return [['application/octet-stream', true], ['application/json', false], ['multipart/form-data', false]];
+    }
+
+    public function testParsingLimitCannotIncreaseTheGeneralBodyLimit()
+    {
+        [$server, $client] = $this->pair();
+        fwrite($client, "POST / HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: 7\r\n\r\n");
+        $this->invoke($this->configuredServer(['maxBodyBytes' => 4, 'maxParsedBodyBytes' => 8]), 'work', new StreamSocket($server),
+            function() { $this->fail('Oversized request must not reach the handler'); });
+        $this->assertStringStartsWith('HTTP/1.1 413 ', stream_get_contents($client));
     }
 
     private function delayedRequest(string $initial, array $chunks, array $options): array

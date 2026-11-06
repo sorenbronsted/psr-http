@@ -4,9 +4,9 @@ namespace bronsted;
 
 class HttpClientProtocolTest extends SocketTestCase
 {
-    private function parse(string $wire, string $method = 'GET')
+    private function parse(string $wire, string $method = 'GET', array $options = [])
     {
-        return $this->invoke(new HttpClient($this->factory, new StreamSocketFactory()), 'readReponse', $this->input($wire), $method);
+        return $this->invoke(new HttpClient($this->factory, new StreamSocketFactory(), ...$options), 'readReponse', $this->input($wire), $method);
     }
 
     public function testCloseDelimitedBodyIsReadUntilEof()
@@ -83,5 +83,87 @@ class HttpClientProtocolTest extends SocketTestCase
     {
         $response = $this->parse("HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n");
         $this->assertSame(500, $response->getStatusCode());
+    }
+
+    /** @dataProvider oversizedBodies */
+    public function testResponseBodyLimitAppliesToEveryFramingMode(string $wire)
+    {
+        $this->expectException(\LengthException::class);
+        $this->parse($wire, options: ['maxResponseBodyBytes' => 4]);
+    }
+
+    public static function oversizedBodies(): array
+    {
+        return [
+            'declared size rejected without reading body' => ["HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\n"],
+            'chunked total' => ["HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nab\r\n3\r\ncde\r\n0\r\n\r\n"],
+            'connection close' => ["HTTP/1.1 200 OK\r\n\r\nabcde"],
+        ];
+    }
+
+    /** @dataProvider exactSizeBodies */
+    public function testResponseBodyAtTheLimitIsAccepted(string $wire)
+    {
+        $response = $this->parse($wire, options: ['maxResponseBodyBytes' => 4]);
+        $this->assertSame('abcd', $response->getBody()->getContents());
+    }
+
+    public static function exactSizeBodies(): array
+    {
+        return [
+            ["HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nabcd"],
+            ["HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nab\r\n2\r\ncd\r\n0\r\n\r\n"],
+            ["HTTP/1.1 200 OK\r\n\r\nabcd"],
+        ];
+    }
+
+    /** @dataProvider emptyBodies */
+    public function testZeroResponseBodyLimitStillAllowsAnEmptyBody(string $wire)
+    {
+        $response = $this->parse($wire, options: ['maxResponseBodyBytes' => 0]);
+        $this->assertSame('', $response->getBody()->getContents());
+    }
+
+    public static function emptyBodies(): array
+    {
+        return [
+            ["HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"],
+            ["HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n"],
+            ["HTTP/1.1 200 OK\r\n\r\n"],
+        ];
+    }
+
+    public function testDefaultResponseBodyLimitIsEightMiB()
+    {
+        $this->expectException(\LengthException::class);
+        $this->parse("HTTP/1.1 200 OK\r\nContent-Length: 8388609\r\n\r\n");
+    }
+
+    public function testResponseHeaderLimitIsConfigurable()
+    {
+        $this->expectException(\LengthException::class);
+        $this->parse("HTTP/1.1 200 OK\r\nX-Large: 1234567890\r\n\r\n", options: ['maxResponseHeaderBytes' => 16]);
+    }
+
+    public function testBodylessResponseDoesNotRejectTheRepresentationsAdvertisedSize()
+    {
+        $response = $this->parse("HTTP/1.1 200 OK\r\nContent-Length: 999999\r\n\r\n", 'HEAD', ['maxResponseBodyBytes' => 0]);
+        $this->assertSame('', $response->getBody()->getContents());
+    }
+
+    /** @dataProvider invalidLimits */
+    public function testInvalidClientLimitsAreRejected(array $options)
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        new HttpClient($this->factory, new StreamSocketFactory(), ...$options);
+    }
+
+    public static function invalidLimits(): array
+    {
+        return [
+            [['timeout' => -1]], [['maxResponseBodyBytes' => -1]], [['maxResponseHeaderBytes' => 1]],
+            [['requestTimeout' => 0.0]], [['requestTimeout' => -1.0]],
+            [['requestTimeout' => INF]], [['requestTimeout' => NAN]],
+        ];
     }
 }

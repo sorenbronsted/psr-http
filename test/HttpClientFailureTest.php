@@ -49,7 +49,8 @@ class HttpClientFailureTest extends TestCase
         $socket->expects($this->once())->method('close');
         $error = new $cause('failure');
         $socket->method($method)->willThrowException($error);
-        $request = (new Psr17Factory())->createRequest('GET', 'http://example.test/');
+        $scheme = $method === 'enableTls' ? 'https' : 'http';
+        $request = (new Psr17Factory())->createRequest('GET', $scheme . '://example.test/');
         $client = $this->client($socket);
 
         try {
@@ -66,6 +67,8 @@ class HttpClientFailureTest extends TestCase
     public static function failures(): array
     {
         return [
+            'TCP connect' => ['awaitConnection', SocketException::class, NetworkExceptionInterface::class],
+            'TLS handshake' => ['enableTls', SocketException::class, NetworkExceptionInterface::class],
             'socket write' => ['write', SocketException::class, NetworkExceptionInterface::class],
             'body read' => ['copyFrom', \RuntimeException::class, RequestExceptionInterface::class],
             'socket read' => ['readLine', SocketException::class, NetworkExceptionInterface::class],
@@ -88,6 +91,21 @@ class HttpClientFailureTest extends TestCase
         }
     }
 
+    public function testExpiredDnsLookupDoesNotStartAConnection()
+    {
+        when('gethostbyname')->alias(function() {
+            usleep(30000);
+            return '127.0.0.1';
+        });
+        $factory = new Psr17Factory();
+        $socketFactory = $this->createMock(StreamSocketFactory::class);
+        $socketFactory->expects($this->never())->method('createStreamSocket');
+        $this->expectException(NetworkExceptionInterface::class);
+        $this->expectExceptionMessage('hostname resolution');
+        (new HttpClient($factory, $socketFactory, requestTimeout: 0.01))
+            ->sendRequest($factory->createRequest('GET', 'http://example.test/'));
+    }
+
     public function testConnectionFailureImplementsNetworkExceptionInterface()
     {
         when('gethostbyname')->justReturn('127.0.0.1');
@@ -106,7 +124,11 @@ class HttpClientFailureTest extends TestCase
         stream_set_blocking($resource, false);
         fwrite($peer, "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nab");
         stream_socket_shutdown($peer, STREAM_SHUT_WR);
-        $client = $this->client(new StreamSocket($resource));
+        // This connected Unix pair stands in for the factory's TCP socket; it
+        // has no IP peer name, so TCP-connect completion itself is mocked.
+        $socket = $this->getMockBuilder(StreamSocket::class)
+            ->setConstructorArgs([$resource])->onlyMethods(['awaitConnection'])->getMock();
+        $client = $this->client($socket);
         $this->expectException(NetworkExceptionInterface::class);
         $client->sendRequest((new Psr17Factory())->createRequest('GET', 'http://example.test/'));
     }
@@ -247,5 +269,39 @@ class HttpClientFailureTest extends TestCase
         catch (NetworkExceptionInterface $error) {
             $this->assertSame($cause, $error->getPrevious());
         }
+    }
+
+    public function testHttpsConnectsTcpWithVerifiedTlsOptionsBeforeWritingTheRequest()
+    {
+        $connection = $this->resource();
+        $seenAddress = $seenOptions = null;
+        when('gethostbyname')->justReturn('127.0.0.1');
+        when('stream_socket_client')->alias(function(...$arguments) use ($connection, &$seenAddress, &$seenOptions) {
+            $seenAddress = $arguments[0];
+            $seenOptions = stream_context_get_options($arguments[5]);
+            return $connection;
+        });
+        $socket = $this->createMock(StreamSocket::class);
+        $encrypted = false;
+        $socket->expects($this->once())->method('awaitConnection');
+        $socket->expects($this->once())->method('enableTls')->willReturnCallback(function($deadline) use (&$encrypted) {
+            $this->assertGreaterThan(hrtime(true) / 1e9, $deadline);
+            $encrypted = true;
+        });
+        $socket->method('write')->willReturnCallback(function() use (&$encrypted) {
+            $this->assertTrue($encrypted, 'No HTTP data may be sent before TLS succeeds');
+        });
+        $socket->method('readLine')->willReturn("HTTP/1.1 200 OK\r\n", "Content-Length: 0\r\n", "\r\n");
+        $streamFactory = $this->createMock(StreamSocketFactory::class);
+        $streamFactory->method('createStreamSocket')->willReturn($socket);
+        $factory = new Psr17Factory();
+        $response = (new HttpClient($factory, $streamFactory))->sendRequest($factory->createRequest('GET', 'https://example.test/'));
+
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('tcp://127.0.0.1:443', $seenAddress);
+        $this->assertTrue($seenOptions['ssl']['verify_peer']);
+        $this->assertTrue($seenOptions['ssl']['verify_peer_name']);
+        $this->assertTrue($seenOptions['ssl']['SNI_enabled']);
+        $this->assertSame('example.test', $seenOptions['ssl']['peer_name']);
     }
 }
