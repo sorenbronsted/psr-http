@@ -215,4 +215,31 @@ class StreamSocketTest extends SocketTestCase
 
         $this->assertInstanceOf(CancelledException::class, $error);
     }
+
+    public function testReadDeadlineAppliesEvenWhenDataIsAlreadyBuffered()
+    {
+        $socket = $this->input("ready\r\n");
+        $socket->setReadDeadline(hrtime(true) / 1e9 - 1);
+        $this->expectException(SocketException::class);
+        $this->expectExceptionCode(408);
+        $socket->readLine();
+    }
+
+    public function testReadDeadlineCanBeClearedWithoutAffectingWrites()
+    {
+        [$reader, $writer] = $this->pair();
+        $socket = new StreamSocket($reader);
+        $socket->setReadDeadline(hrtime(true) / 1e9 - 1);
+        $socket->write('response');
+        $this->assertSame('response', stream_get_contents($writer));
+        $socket->setReadDeadline(null);
+        fwrite($writer, 'x');
+        $this->assertSame('x', $socket->read(1));
+    }
+
+    public function testNonFiniteReadDeadlineIsRejected()
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->input('')->setReadDeadline(INF);
+    }
 }

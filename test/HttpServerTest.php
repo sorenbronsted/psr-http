@@ -24,7 +24,7 @@ class HttpServerTest extends TestCase
     {
         $called = false;
         $fh = tmpfile();
-        fwrite($fh, "POST / HTTP/1.1\r\n\r\n");
+        fwrite($fh, "POST / HTTP/1.1\r\nHost: localhost\r\n\r\n");
         rewind($fh);
         when('stream_socket_server')->justReturn($fh);
         when('stream_socket_accept')->returnArg(1);
@@ -33,7 +33,7 @@ class HttpServerTest extends TestCase
         $server = new HttpServer('0.0.0.0', 8000, $factory, $factory, $factory, $factory, $factory);
         $self = $this;
         $server->run(function(ServerRequestInterface $request) use ($factory, &$called, $self) {
-            $self->assertEmpty($request->getHeaders());
+            $self->assertSame('localhost', $request->getHeaderLine('Host'));
             $self->assertEmpty($request->getBody()->getContents());
             $called = true;
             return $factory->createResponse();

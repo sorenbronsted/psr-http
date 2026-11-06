@@ -31,7 +31,7 @@ class HttpServerProtocolTest extends SocketTestCase
     public function testV20LoggerArgumentRecordsRequestTiming()
     {
         $logger = new TestLogger();
-        $response = $this->respond("GET / HTTP/1.1\r\n\r\n", log: $logger);
+        $response = $this->respond("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n", log: $logger);
 
         $this->assertStringStartsWith('HTTP/1.1 200 ', $response);
         $this->assertCount(1, $logger->records);
@@ -44,7 +44,7 @@ class HttpServerProtocolTest extends SocketTestCase
     {
         $logger = new TestLogger();
         $cause = new \RuntimeException('handler failed');
-        $response = $this->respond("GET / HTTP/1.1\r\n\r\n", function() use ($cause) { throw $cause; }, log: $logger);
+        $response = $this->respond("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n", function() use ($cause) { throw $cause; }, log: $logger);
 
         $this->assertStringStartsWith('HTTP/1.1 500 ', $response);
         $this->assertSame($cause, $logger->recordsByLevel['error'][0]['context']['exception']);
@@ -56,7 +56,7 @@ class HttpServerProtocolTest extends SocketTestCase
         $logger = $this->createMock(LoggerInterface::class);
         $logger->expects($this->once())->method('error')->willThrowException(new \RuntimeException('logger failed'));
         $logger->expects($this->once())->method('debug')->willThrowException(new \RuntimeException('logger failed'));
-        $response = $this->respond("GET / HTTP/1.1\r\n\r\n", function() { throw new \RuntimeException('handler failed'); }, log: $logger);
+        $response = $this->respond("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n", function() { throw new \RuntimeException('handler failed'); }, log: $logger);
 
         $this->assertStringStartsWith('HTTP/1.1 500 ', $response);
     }
@@ -64,7 +64,7 @@ class HttpServerProtocolTest extends SocketTestCase
     /** @dataProvider handlerErrors */
     public function testHandlerFailureReturns500AndDoesNotEscape(string $class)
     {
-        $response = $this->respond("GET / HTTP/1.1\r\n\r\n", function() use ($class) {
+        $response = $this->respond("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n", function() use ($class) {
             throw new $class('handler failed');
         });
         $this->assertStringStartsWith('HTTP/1.1 500 ', $response);
@@ -79,7 +79,7 @@ class HttpServerProtocolTest extends SocketTestCase
     public function testWriteFailureClosesConnectionAndDoesNotEscape()
     {
         $stream = $this->createMock(StreamSocket::class);
-        $stream->method('readLine')->willReturn("GET / HTTP/1.1\r\n", "\r\n");
+        $stream->method('readLine')->willReturn("GET / HTTP/1.1\r\n", "Host: localhost\r\n", "\r\n");
         $stream->method('copyFrom')->willThrowException(new SocketException('broken pipe'));
         $stream->expects($this->once())->method('close');
         $factory = $this->factory;
@@ -87,14 +87,14 @@ class HttpServerProtocolTest extends SocketTestCase
             return $factory->createResponse()->withBody($factory->createStream('x'));
         });
 
-        $response = $this->respond("GET / HTTP/1.1\r\n\r\n");
+        $response = $this->respond("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n");
         $this->assertStringStartsWith('HTTP/1.1 200 ', $response);
     }
 
     public function testResponseUsesSingleContentLengthAndSeparateCookieHeaders()
     {
         $factory = $this->factory;
-        $response = $this->respond("GET / HTTP/1.1\r\n\r\n", function() use ($factory) {
+        $response = $this->respond("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n", function() use ($factory) {
             return $factory->createResponse()->withHeader('Content-Length', '99')
                 ->withHeader('Transfer-Encoding', 'chunked')->withHeader('Connection', 'keep-alive')
                 ->withAddedHeader('Set-Cookie', 'session=abc; HttpOnly')
@@ -114,7 +114,7 @@ class HttpServerProtocolTest extends SocketTestCase
         $factory = $this->factory;
         $request = null;
         $response = $this->respond("GET /?name=alice%26admin%3Dtrue&token=a%3Db&empty HTTP/1.1\r\n"
-            . "Cookie: session=abc==; theme=dark; escaped=a%3Bb; plus=a+b\r\n\r\n",
+            . "Host: localhost\r\nCookie: session=abc==; theme=dark; escaped=a%3Bb; plus=a+b\r\n\r\n",
             function($incoming) use ($factory, &$request) {
                 $request = $incoming;
                 return $factory->createResponse();
@@ -129,7 +129,7 @@ class HttpServerProtocolTest extends SocketTestCase
     {
         $factory = $this->factory;
         $body = null;
-        $this->respond("POST / HTTP/1.1\r\nContent-Length: 5\r\n\r\nhello", function($request) use ($factory, &$body) {
+        $this->respond("POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: 5\r\n\r\nhello", function($request) use ($factory, &$body) {
             $body = $request->getBody()->getContents();
             return $factory->createResponse();
         });
@@ -140,7 +140,7 @@ class HttpServerProtocolTest extends SocketTestCase
     {
         $factory = $this->factory;
         $body = null;
-        $this->respond("POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n3\r\n a \r\n0\r\n\r\n",
+        $this->respond("POST / HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\n\r\n3\r\n a \r\n0\r\n\r\n",
             function($request) use ($factory, &$body) {
                 $body = $request->getBody()->getContents();
                 return $factory->createResponse();
@@ -153,7 +153,7 @@ class HttpServerProtocolTest extends SocketTestCase
         $factory = $this->factory;
         $request = null;
         $json = '{"name":"alice"}';
-        $this->respond("POST / HTTP/1.1\r\nContent-Type: application/json\r\nContent-Length: " . strlen($json) . "\r\n\r\n" . $json,
+        $this->respond("POST / HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: " . strlen($json) . "\r\n\r\n" . $json,
             function($incoming) use ($factory, &$request) {
                 $request = $incoming;
                 return $factory->createResponse();
@@ -167,7 +167,7 @@ class HttpServerProtocolTest extends SocketTestCase
         $factory = $this->factory;
         $request = null;
         $body = "--test-boundary\r\nContent-Disposition: form-data; name=\"name\"\r\n\r\nalice\r\n--test-boundary--\r\n";
-        $this->respond("POST / HTTP/1.1\r\nContent-Type: multipart/form-data; boundary=test-boundary\r\n"
+        $this->respond("POST / HTTP/1.1\r\nHost: localhost\r\nContent-Type: multipart/form-data; boundary=test-boundary\r\n"
             . 'Content-Length: ' . strlen($body) . "\r\n\r\n" . $body,
             function($incoming) use ($factory, &$request) {
                 $request = $incoming;
@@ -185,7 +185,7 @@ class HttpServerProtocolTest extends SocketTestCase
         $body->method('eof')->willReturn(false, true);
         $body->method('read')->willReturn('payload');
         $factory = $this->factory;
-        $response = $this->respond("GET / HTTP/1.1\r\n\r\n", function() use ($factory, $body) {
+        $response = $this->respond("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n", function() use ($factory, $body) {
             return $factory->createResponse()->withHeader('Content-Length', '999')->withBody($body);
         });
         $this->assertStringNotContainsString('Content-Length:', $response);
@@ -208,16 +208,16 @@ class HttpServerProtocolTest extends SocketTestCase
             'unterminated start line' => ['GET /' . str_repeat('x', 9000), 414, 65536, 8],
             'single large header' => ["GET / HTTP/1.1\r\nX: " . str_repeat('x', 8300) . "\r\n\r\n", 431, 65536, 8],
             'total headers' => ["GET / HTTP/1.1\r\nA: 123456\r\nB: 123456\r\n\r\n", 431, 20, 8],
-            'declared body' => ["POST / HTTP/1.1\r\nContent-Length: 9\r\n\r\n", 413, 65536, 8],
-            'chunked body' => ["POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n", 413, 65536, 4],
-            'short body' => ["POST / HTTP/1.1\r\nContent-Length: 5\r\n\r\nab", 400, 65536, 8],
+            'declared body' => ["POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: 9\r\n\r\n", 413, 65536, 8],
+            'chunked body' => ["POST / HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n", 413, 65536, 4],
+            'short body' => ["POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: 5\r\n\r\nab", 400, 65536, 8],
             'malformed header' => ["GET / HTTP/1.1\r\nNo colon\r\n\r\n", 400, 65536, 8],
-            'ambiguous framing' => ["POST / HTTP/1.1\r\nContent-Length: 5\r\nTransfer-Encoding: chunked\r\n\r\n", 400, 65536, 8],
-            'conflicting lengths' => ["POST / HTTP/1.1\r\nContent-Length: 2\r\nContent-Length: 3\r\n\r\n", 400, 65536, 8],
-            'invalid length' => ["POST / HTTP/1.1\r\nContent-Length: -1\r\n\r\n", 400, 65536, 8],
-            'overflow length' => ["POST / HTTP/1.1\r\nContent-Length: 999999999999999999999\r\n\r\n", 413, 65536, 8],
+            'ambiguous framing' => ["POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: 5\r\nTransfer-Encoding: chunked\r\n\r\n", 400, 65536, 8],
+            'conflicting lengths' => ["POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: 2\r\nContent-Length: 3\r\n\r\n", 400, 65536, 8],
+            'invalid length' => ["POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: -1\r\n\r\n", 400, 65536, 8],
+            'overflow length' => ["POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: 999999999999999999999\r\n\r\n", 413, 65536, 8],
             'header whitespace' => ["GET / HTTP/1.1\r\nHost : localhost\r\n\r\n", 400, 65536, 8],
-            'invalid json' => ["POST / HTTP/1.1\r\nContent-Type: application/json\r\nContent-Length: 1\r\n\r\n!", 400, 65536, 8],
+            'invalid json' => ["POST / HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: 1\r\n\r\n!", 400, 65536, 8],
         ];
     }
 
@@ -225,7 +225,7 @@ class HttpServerProtocolTest extends SocketTestCase
     public function testResponsesThatMustNotHaveBodiesAreNotWritten(string $method, int $status)
     {
         $factory = $this->factory;
-        $response = $this->respond($method . " / HTTP/1.1\r\n\r\n", function() use ($factory, $status) {
+        $response = $this->respond($method . " / HTTP/1.1\r\nHost: localhost\r\n\r\n", function() use ($factory, $status) {
             return $factory->createResponse($status)->withBody($factory->createStream('hidden'));
         });
         $this->assertStringEndsWith("\r\n\r\n", $response);

@@ -89,11 +89,41 @@ arguments `maxHeaderBytes` and `maxBodyBytes` override the total-header and body
 limits. Ambiguous framing, such as both `Content-Length` and `Transfer-Encoding`,
 is rejected rather than guessed.
 
+HTTP/1.1 requests must contain exactly one non-empty, valid `Host` header.
+Missing, duplicate, comma-combined or malformed values receive `400`, including
+when an absolute-form request target would let a PSR-17 factory infer a host.
+Registered names, IPv4, bracketed IPv6/IP literals and optional ports are supported.
+
+The server also accepts these optional named constructor arguments:
+
+| Argument | Default | Behavior |
+| --- | --- | --- |
+| `headerTimeout` | `10.0` seconds | Absolute deadline for receiving the request line and headers. |
+| `requestTimeout` | `30.0` seconds | Absolute deadline for receiving the entire request, including headers, body and chunk trailers. |
+| `maxConnections` | `256` | Maximum accepted connections being processed, including response writes. |
+
+Both deadlines start when the socket is accepted, not when its worker is scheduled.
+Receiving another byte does not reset them. The earlier deadline applies while
+reading headers; after that, only the overall request deadline applies. Expired
+reads return `408`. These limits do not interrupt handler code or synchronous
+parsing; the existing five-second socket I/O inactivity timeout remains in place.
+Timeouts must be finite and positive, and `maxConnections` must be at least one.
+Increase the request timeout for applications that intentionally accept slow uploads.
+
+Excess connections receive a best-effort `503` with `Retry-After: 1` and are
+immediately closed without allocating a worker fiber. A connection slot is released
+on completion, timeout, disconnection or handler/write failure. This is a global
+resource limit, not per-IP rate limiting; configure the latter at your ingress.
+
 The listening socket uses a 511-deep backlog by default, adjustable through the
-last constructor argument (`$backlog`); the kernel caps it at `net.core.somaxconn`.
+`backlog` constructor argument; the kernel caps it at `net.core.somaxconn`.
 A larger backlog matters when many clients connect at the same moment: with a small
 queue the kernel drops SYNs, and TCP retransmits them after about a second, which
 shows up as multi-second response times in load tests.
+
+These security defaults were introduced in **v3.0.4**. Existing valid requests and
+constructor argument positions remain supported; clients sending invalid HTTP/1.1
+Host headers must be corrected.
 
 The client reads fixed-length, chunked, and connection-close-delimited responses.
 Informational responses are skipped until the final response; HEAD, 204, 205,

@@ -69,7 +69,7 @@ class HttpIntegrationTest extends SocketTestCase
         $healthy = $this->request("GET /ok HTTP/1.1\r\nHost: localhost\r\n\r\n");
         $this->assertStringStartsWith('HTTP/1.1 200 ', $healthy);
         $this->assertStringEndsWith("\r\n\r\nok", $healthy);
-        $this->request("GET /stop HTTP/1.1\r\n\r\n");
+        $this->request("GET /stop HTTP/1.1\r\nHost: localhost\r\n\r\n");
     }
 
     public function testClientAndServerRoundTripBinaryBodyWithoutContentType()
@@ -87,7 +87,7 @@ class HttpIntegrationTest extends SocketTestCase
 
         $this->assertSame(200, $response->getStatusCode());
         $this->assertSame($payload, $response->getBody()->getContents());
-        $this->request("GET /stop HTTP/1.1\r\n\r\n");
+        $this->request("GET /stop HTTP/1.1\r\nHost: localhost\r\n\r\n");
     }
 
     public function testServerAcceptsABurstOfConnectionsWithoutSynRetransmits()

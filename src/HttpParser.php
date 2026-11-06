@@ -38,6 +38,28 @@ final class HttpParser
         }
     }
 
+    public static function validateHost(MessageInterface $message): void
+    {
+        $values = $message->getHeader('Host');
+        if (count($values) !== 1) {
+            throw new UnexpectedValueException('Exactly one Host header is required', 400);
+        }
+        $host = $values[0];
+        // A registered name or bracketed IP literal, optionally followed by a
+        // port. Commas are rejected rather than interpreting a combined list.
+        if (!preg_match("/^((?:[A-Za-z0-9._~!$&'()*+;=-]|%[A-Fa-f0-9]{2})+|\\[[^\\]]+\\])(?::([0-9]+))?$/D", $host, $parts)
+            || (isset($parts[2]) && (int) $parts[2] > 65535)) {
+            throw new UnexpectedValueException('Invalid Host header', 400);
+        }
+        if ($parts[1][0] === '[') {
+            $literal = substr($parts[1], 1, -1);
+            if (filter_var($literal, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) === false
+                && !preg_match("/^v[0-9a-f]+\\.[A-Za-z0-9._~!$&'()*+,;=:-]+$/iD", $literal)) {
+                throw new UnexpectedValueException('Invalid Host IP literal', 400);
+            }
+        }
+    }
+
     public static function contentLength(MessageInterface $message): ?int
     {
         if (!$message->hasHeader('Content-Length')) {

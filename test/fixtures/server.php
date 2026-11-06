@@ -25,7 +25,8 @@ namespace bronsted {
 namespace {
     require __DIR__ . '/../../vendor/autoload.php';
     $factory = new \Nyholm\Psr7\Factory\Psr17Factory();
-    $server = new \bronsted\HttpServer('127.0.0.1', 0, $factory, $factory, $factory, $factory, $factory);
+    $options = json_decode($argv[1] ?? '{}', true, flags: JSON_THROW_ON_ERROR);
+    $server = new \bronsted\HttpServer('127.0.0.1', 0, $factory, $factory, $factory, $factory, $factory, ...$options);
     $server->run(function($request) use ($factory) {
         $path = $request->getUri()->getPath();
         if ($path === '/fail') {

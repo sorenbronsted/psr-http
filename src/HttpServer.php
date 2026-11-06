@@ -30,6 +30,9 @@ class HttpServer
     private int $maxHeaderBytes;
     private int $maxBodyBytes;
     private int $backlog;
+    private float $headerTimeout;
+    private float $requestTimeout;
+    private int $maxConnections;
     private LoggerInterface $log;
 
     public function __construct(
@@ -43,9 +46,14 @@ class HttpServer
         ?LoggerInterface $log = null,
         int $maxHeaderBytes = 65536,
         int $maxBodyBytes = 8388608,
-        int $backlog = 511
+        int $backlog = 511,
+        float $headerTimeout = 10.0,
+        float $requestTimeout = 30.0,
+        int $maxConnections = 256
     ) {
-        if ($maxHeaderBytes < 2 || $maxBodyBytes < 0 || $backlog < 1) {
+        if ($maxHeaderBytes < 2 || $maxBodyBytes < 0 || $backlog < 1 || $maxConnections < 1
+            || !is_finite($headerTimeout) || $headerTimeout <= 0
+            || !is_finite($requestTimeout) || $requestTimeout <= 0) {
             throw new \InvalidArgumentException('Invalid HTTP limits');
         }
         $this->interface = $interface;
@@ -59,6 +67,9 @@ class HttpServer
         $this->maxHeaderBytes = $maxHeaderBytes;
         $this->maxBodyBytes = $maxBodyBytes;
         $this->backlog = $backlog;
+        $this->headerTimeout = $headerTimeout;
+        $this->requestTimeout = $requestTimeout;
+        $this->maxConnections = $maxConnections;
         $this->loop = FiberLoop::instance();
     }
 
@@ -87,15 +98,30 @@ class HttpServer
             throw new Exception('Create socket failed: ' . $errorMessage, $errorCode);
         }
         stream_set_blocking($server, false);
-        $accept = function() use ($server, $callback): bool {
+        $activeConnections = 0;
+        $accept = function() use ($server, $callback, &$activeConnections): bool {
             $stream = @stream_socket_accept($server, 0);
             if (!is_resource($stream)) {
                 return false;
             }
             stream_set_blocking($stream, false);
+            if ($activeConnections >= $this->maxConnections) {
+                // Best-effort rejection: never wait for an overloaded peer or
+                // allocate another connection fiber just to send this response.
+                @fwrite($stream, "HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\nRetry-After: 1\r\n\r\n");
+                fclose($stream);
+                return true;
+            }
+            $acceptedAt = hrtime(true) / 1e9;
+            $activeConnections++;
             $stream = new StreamSocket($stream);
-            $this->loop->defer(function() use ($stream, $callback) {
-                $this->work($stream, $callback);
+            $this->loop->defer(function() use ($stream, $callback, $acceptedAt, &$activeConnections) {
+                try {
+                    $this->work($stream, $callback, $acceptedAt);
+                }
+                finally {
+                    $activeConnections--;
+                }
             });
             return true;
         };
@@ -127,15 +153,20 @@ class HttpServer
         }
     }
 
-    private function work(StreamSocket $stream, Closure $callback)
+    private function work(StreamSocket $stream, Closure $callback, ?float $acceptedAt = null)
     {
         $start = microtime(true);
+        $acceptedAt ??= hrtime(true) / 1e9;
+        $requestDeadline = $acceptedAt + $this->requestTimeout;
         $request = null;
         try {
             try {
+                $stream->setReadDeadline(min($acceptedAt + $this->headerTimeout, $requestDeadline));
                 $request = $this->createRequest($stream);
                 $request = $this->addHeaders($stream, $request);
+                $stream->setReadDeadline($requestDeadline);
                 $request = $this->addBody($stream, $request);
+                $stream->setReadDeadline(null);
                 $response = null;
             }
             catch (Throwable $error) {
@@ -254,7 +285,10 @@ class HttpServer
 
     private function addHeaders(StreamSocket $reader, ServerRequestInterface $request): ServerRequestInterface
     {
-        $request = HttpParser::readHeaders($reader, $request, $this->maxHeaderBytes);
+        // A PSR-17 factory can synthesize Host from an absolute-form target.
+        // Validate the actual wire header, not that synthesized value.
+        $request = HttpParser::readHeaders($reader, $request->withoutHeader('Host'), $this->maxHeaderBytes);
+        HttpParser::validateHost($request);
         $cookies = [];
         foreach ($request->getHeader('Cookie') as $header) {
             foreach (explode(';', $header) as $part) {

@@ -12,6 +12,7 @@ class StreamSocket
 {
     private mixed $stream;
     private FiberLoop $loop;
+    private ?float $readDeadline = null;
 
     public function __construct(mixed $stream)
     {
@@ -24,6 +25,15 @@ class StreamSocket
         if (is_resource($this->stream)) {
             fclose($this->stream);
         }
+    }
+
+    /** Set an absolute monotonic deadline in seconds (hrtime(true) / 1e9). */
+    public function setReadDeadline(?float $deadline): void
+    {
+        if ($deadline !== null && !is_finite($deadline)) {
+            throw new \InvalidArgumentException('Read deadline must be finite');
+        }
+        $this->readDeadline = $deadline;
     }
 
     public function readLine(int $maxLength = 8192): string
@@ -157,6 +167,7 @@ class StreamSocket
     {
         while (true) {
             $this->assertOpen();
+            $this->assertReadDeadline();
             $bytes = @fread($this->stream, $length);
             if ($bytes === false) {
                 throw new SocketException('fread failed');
@@ -187,9 +198,21 @@ class StreamSocket
         }
     }
 
+    private function assertReadDeadline(): void
+    {
+        if ($this->readDeadline !== null && hrtime(true) / 1e9 >= $this->readDeadline) {
+            throw new SocketException('Request read deadline exceeded', 408);
+        }
+    }
+
     private function wait(bool $read): void
     {
-        $suspend = new Suspend();
+        $timeout = 5.0;
+        if ($read && $this->readDeadline !== null) {
+            $this->assertReadDeadline();
+            $timeout = min($timeout, max(0.0, $this->readDeadline - hrtime(true) / 1e9));
+        }
+        $suspend = new Suspend($timeout);
         $ready = fn() => $suspend->done();
         // Fiberloop calls a read watcher one final time when the stream reaches
         // EOF, so no polling is needed to notice a peer closing its side.
@@ -203,7 +226,7 @@ class StreamSocket
             throw $error;
         }
         catch (Throwable $error) {
-            throw new SocketException('Timed out waiting for socket', 0, $error);
+            throw new SocketException('Timed out waiting for socket', $read && $this->readDeadline !== null ? 408 : 0, $error);
         }
         finally {
             // Fiberloop allows only one read and one write watcher per resource,
